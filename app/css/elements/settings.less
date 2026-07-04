@@ -28,4 +28,22 @@ cyp-settings {
 			margin: 0 4px 0 0;
 		}
 	}
+	.system-actions {
+		margin: var(--spacing);
+		margin-top: 2em;
+		padding-top: var(--spacing);
+		border-top: 1px solid var(--bg-alt);
+		.flex-column;
+		align-items: flex-start;
+		button {
+			text-decoration: underline;
+			margin-top: 1em;
+			&:first-child {
+				margin-top: 0;
+			}
+		}
+	}
+	#shutdown-btn {
+		color: #e05252;
+	}
 }

@@ -111,6 +111,31 @@ function handleTicket(request, response) {
 	});
 }
 
+function handleShutdown(response) {
+	console.log("System shutdown requested");
+	response.setHeader("Content-Type", "application/json");
+	response.end(JSON.stringify({ ok: true }));
+
+	require("child_process").exec("sudo /usr/sbin/shutdown -h now", (error, stdout, stderr) => {
+		if (error) { console.log("Shutdown error", error, stderr); }
+	});
+}
+
+function handleRefresh(response) {
+	console.log("Refresh requested: remounting USB and updating MPD database");
+	response.setHeader("Content-Type", "application/json");
+
+	const command = "sudo /usr/bin/mount -a && mpc update --wait";
+	require("child_process").exec(command, (error, stdout, stderr) => {
+		if (error) {
+			console.log("Refresh error", error, stderr);
+			response.end(JSON.stringify({ ok: false, error: stderr || error.message }));
+		} else {
+			response.end(JSON.stringify({ ok: true }));
+		}
+	});
+}
+
 function onRequest(request, response) {
 	const url = new URL(request.url, "http://localhost");
 
@@ -126,6 +151,12 @@ function onRequest(request, response) {
 
 			case request.method == "POST" && url.pathname == "/ticket":
 			return handleTicket(request, response);
+
+		case request.method == "POST" && url.pathname == "/shutdown":
+			return handleShutdown(response);
+
+		case request.method == "POST" && url.pathname == "/refresh":
+			return handleRefresh(response);
 
 		default:
 			return request.on("end", () => app.serve(request, response)).resume();
@@ -143,7 +174,7 @@ function requestValidator(request) {
 	}
 }
 
-let httpServer = require("http").createServer(onRequest).listen(port);
+let httpServer = require("http").createServer(onRequest).listen(port, '0.0.0.0');
 let passwords = {};
 try {
 	passwords = require("./passwords.json");

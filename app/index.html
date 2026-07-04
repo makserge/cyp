@@ -80,6 +80,10 @@
 						</select>
 					</dd>
 				</dl>
+				<div class="system-actions">
+					<button id="refresh-btn" type="button">Refresh content</button>
+					<button id="shutdown-btn" type="button">System shutdown</button>
+				</div>
 			</cyp-settings>
 		</main>
 		<footer>
@@ -99,5 +103,34 @@
 		</cyp-app>
 
 		<script type="module" src="cyp.js?2"></script>
+		<script type="module">
+			const refreshBtn = document.getElementById("refresh-btn");
+			const shutdownBtn = document.getElementById("shutdown-btn");
+
+			refreshBtn.addEventListener("click", async () => {
+				refreshBtn.disabled = true;
+				const original = refreshBtn.textContent;
+				refreshBtn.textContent = "Refreshing…";
+				try {
+					const res = await fetch("/refresh", { method: "POST" });
+					const data = await res.json();
+					refreshBtn.textContent = data.ok ? "Done!" : "Failed";
+				} catch (e) {
+					refreshBtn.textContent = "Failed";
+				} finally {
+					setTimeout(() => {
+						refreshBtn.disabled = false;
+						refreshBtn.textContent = original;
+					}, 2000);
+				}
+			});
+
+			shutdownBtn.addEventListener("click", async () => {
+				if (!confirm("Shut down the system now?")) { return; }
+				shutdownBtn.disabled = true;
+				shutdownBtn.textContent = "Shutting down…";
+				await fetch("/shutdown", { method: "POST" });
+			});
+		</script>
 	</body>
 </html>
