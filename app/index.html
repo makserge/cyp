@@ -125,11 +125,35 @@
 				}
 			});
 
+			async function isHostAlive() {
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), 2000);
+				try {
+					await fetch("/settings", { method: "GET", cache: "no-store", signal: controller.signal });
+					return true;
+				} catch (e) {
+					return false;
+				} finally {
+					clearTimeout(timeout);
+				}
+			}
+
+			function watchForShutdown() {
+				const pingInterval = setInterval(async () => {
+					const alive = await isHostAlive();
+					if (!alive) {
+						clearInterval(pingInterval);
+						shutdownBtn.textContent = "Switched off";
+					}
+				}, 2000);
+			}
+
 			shutdownBtn.addEventListener("click", async () => {
 				if (!confirm("Shut down the system now?")) { return; }
 				shutdownBtn.disabled = true;
 				shutdownBtn.textContent = "Shutting down…";
 				await fetch("/shutdown", { method: "POST" });
+				watchForShutdown();
 			});
 		</script>
 	</body>
