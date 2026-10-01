@@ -7,11 +7,18 @@ import { PathData } from "../parser.js";
 export default class Path extends Item {
 	protected isDirectory: boolean;
 
-	constructor(protected data: PathData) {
+	constructor(protected data: PathData, subtitle = "") {
 		super();
 		this.isDirectory = ("directory" in this.data);
 		this.append(html.icon(this.isDirectory ? "folder" : "music"));
-		this.buildTitle(format.fileName(this.file));
+
+		if (subtitle) {
+			const block = html.node("div", {className:"multiline"}, "", this);
+			block.append(this.buildTitle(format.fileName(this.file)));
+			html.node("span", {className:"subtitle"}, subtitle, block);
+		} else {
+			this.buildTitle(format.fileName(this.file));
+		}
 	}
 
 	get file() { return (this.isDirectory ? this.data.directory : this.data.file) as string; }

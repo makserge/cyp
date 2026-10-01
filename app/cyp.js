@@ -1,5 +1,22 @@
 "use strict";
 (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __propIsEnum = Object.prototype.propertyIsEnumerable;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __spreadValues = (a, b) => {
+    for (var prop in b || (b = {}))
+      if (__hasOwnProp.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    if (__getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(b)) {
+        if (__propIsEnum.call(b, prop))
+          __defNormalProp(a, prop, b[prop]);
+      }
+    return a;
+  };
+
   // node_modules/custom-range/range.js
   var Range = class extends HTMLElement {
     static get observedAttributes() {
@@ -337,6 +354,17 @@
     async searchSongs(filter) {
       let tokens = ["search", serializeFilter(filter, "contains")];
       let lines = await this.command(tokens.join(" "));
+      return songList(lines);
+    }
+    /**
+     * Case-insensitive substring search of a single tag (or "file" for the song URI),
+     * optionally restricted to songs below the `base` directory.
+     */
+    async searchTag(tag, query, base = "") {
+      let parts = [`(${tag} contains "${escape(query)}")`];
+      base && parts.push(`(base "${escape(base)}")`);
+      let filterStr = `(${parts.join(" AND ")})`;
+      let lines = await this.command(`search "${escape(filterStr)}"`);
       return songList(lines);
     }
     async albumArt(songUrl) {
@@ -1093,7 +1121,8 @@
       return node("span", { className: "title" }, title, this);
     }
     matchPrefix(prefix2) {
-      return (this.textContent || "").match(/\w+/g).some((word) => word.toLowerCase().startsWith(prefix2));
+      const words = (this.textContent || "").toLowerCase().split(/[\s!-\/:-@\[-`{-~·]+/);
+      return words.some((word) => word.startsWith(prefix2));
     }
   };
 
@@ -1602,12 +1631,18 @@
 
   // app/js/elements/path.ts
   var Path = class extends Item {
-    constructor(data) {
+    constructor(data, subtitle2 = "") {
       super();
       this.data = data;
       this.isDirectory = "directory" in this.data;
       this.append(icon(this.isDirectory ? "folder" : "music"));
-      this.buildTitle(fileName(this.file));
+      if (subtitle2) {
+        const block = node("div", { className: "multiline" }, "", this);
+        block.append(this.buildTitle(fileName(this.file)));
+        node("span", { className: "subtitle" }, subtitle2, block);
+      } else {
+        this.buildTitle(fileName(this.file));
+      }
     }
     get file() {
       return this.isDirectory ? this.data.directory : this.data.file;
@@ -1641,7 +1676,128 @@
   };
   customElements.define("cyp-filter", Filter);
 
+  // app/js/elements/file-tools.ts
+  var STORAGE_KEY = "cyp-library-sort";
+  var DEBOUNCE = 400;
+  var LABELS = {
+    name: "Name",
+    modified: "Date"
+  };
+  function loadSort() {
+    try {
+      const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      if (data && (data.key == "name" || data.key == "modified") && typeof data.desc == "boolean") {
+        return { key: data.key, desc: data.desc };
+      }
+    } catch (e) {
+    }
+    return { key: "name", desc: false };
+  }
+  function saveSort(order) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(order));
+    } catch (e) {
+    }
+  }
+  function describe(order) {
+    if (order.key == "name") {
+      return order.desc ? "Name, Z to A" : "Name, A to Z";
+    }
+    return order.desc ? "Modified, newest first" : "Modified, oldest first";
+  }
+  var FileTools = class extends HTMLElement {
+    constructor() {
+      super();
+      this.order = loadSort();
+      this.lastQuery = "";
+      this.form = node("form", {}, "", this);
+      icon("magnify", this.form);
+      this.input = node("input", {
+        type: "search",
+        placeholder: "Search files and folders",
+        autocomplete: "off",
+        spellcheck: false
+      }, "", this.form);
+      this.form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        this.input.blur();
+        this.submit();
+      });
+      this.input.addEventListener("input", (_) => {
+        clearTimeout(this.timeout);
+        this.timeout = window.setTimeout(() => this.submit(), DEBOUNCE);
+      });
+      const sort = node("div", { className: "sort" }, "", this);
+      this.buttons = {
+        name: button({ type: "button" }, "", sort),
+        modified: button({ type: "button" }, "", sort)
+      };
+      Object.keys(this.buttons).forEach((key) => {
+        this.buttons[key].addEventListener("click", (_) => this.toggleSort(key));
+      });
+      this.syncButtons();
+    }
+    get value() {
+      return this.input.value.trim();
+    }
+    set value(value) {
+      clearTimeout(this.timeout);
+      this.input.value = value;
+      this.lastQuery = this.value;
+    }
+    get sort() {
+      return __spreadValues({}, this.order);
+    }
+    onSearch(query) {
+    }
+    onSort(order) {
+    }
+    pending(pending) {
+      this.classList.toggle("pending", pending);
+    }
+    submit() {
+      clearTimeout(this.timeout);
+      const query = this.value;
+      if (query == this.lastQuery) {
+        return;
+      }
+      this.lastQuery = query;
+      this.onSearch(query);
+    }
+    toggleSort(key) {
+      if (this.order.key == key) {
+        this.order.desc = !this.order.desc;
+      } else {
+        this.order = { key, desc: key == "modified" };
+      }
+      saveSort(this.order);
+      this.syncButtons();
+      this.onSort(this.sort);
+    }
+    syncButtons() {
+      Object.keys(this.buttons).forEach((key) => {
+        const button2 = this.buttons[key];
+        const active = this.order.key == key;
+        clear(button2);
+        text(LABELS[key], button2);
+        button2.classList.toggle("active", active);
+        button2.setAttribute("aria-pressed", String(active));
+        if (active) {
+          icon(this.order.desc ? "arrow-down-bold" : "arrow-up-bold", button2);
+          const next = { key, desc: !this.order.desc };
+          button2.title = `Sorted by ${describe(this.order)}. Click for ${describe(next)}.`;
+        } else {
+          button2.title = `Sort by ${describe({ key, desc: key == "modified" })}`;
+        }
+      });
+    }
+  };
+  customElements.define("cyp-file-tools", FileTools);
+
   // app/js/elements/library.ts
+  var MIN_PATH_QUERY = 2;
+  var MAX_PATH_RESULTS = 500;
+  var collator = new Intl.Collator(void 0, { numeric: true, sensitivity: "base" });
   var TAGS = {
     "Album": "Albums",
     "AlbumArtist": "Artists",
@@ -1652,7 +1808,11 @@
       super();
       this.search = new Search();
       this.filter = new Filter();
+      this.fileTools = new FileTools();
       this.stateStack = [];
+      this.pathEntries = [];
+      this.pathNodes = [];
+      this.pathToken = 0;
       this.search.onSubmit = () => {
         let query = this.search.value;
         if (query.length < 3) {
@@ -1660,6 +1820,8 @@
         }
         this.doSearch(query);
       };
+      this.fileTools.onSearch = (query) => this.searchPath(query);
+      this.fileTools.onSort = () => this.renderPathEntries();
     }
     popState() {
       this.selection.clear();
@@ -1705,7 +1867,7 @@
           this.listSongs(state.filter);
           break;
         case "path":
-          this.listPath(state.path);
+          this.listPath(state.path, state.query);
           break;
         case "search":
           this.showSearch(state.query);
@@ -1724,21 +1886,135 @@
       let albumNodes = nodes.filter((node2) => node2.type == "Album");
       this.configureSelection(albumNodes);
     }
-    async listPath(path) {
-      let paths = await this.mpd.listPath(path);
+    async listPath(path, query = "") {
+      const token = ++this.pathToken;
+      const entries = await this.loadPathEntries(path, query);
+      if (token != this.pathToken) {
+        return;
+      }
       clear(this);
       path && this.buildBack();
-      paths["directory"].length + paths["file"].length > 0 && this.addFilter();
-      let items = [...paths["directory"], ...paths["file"]];
-      let nodes = items.map((data) => {
-        let node2 = new Path(data);
-        if (data.directory) {
-          const path2 = data.directory;
-          node2.addButton("chevron-double-right", () => this.pushState({ type: "path", path: path2 }));
+      this.append(this.fileTools);
+      this.fileTools.value = query;
+      this.fileTools.pending(false);
+      this.pathEntries = entries;
+      this.pathNodes = [];
+      this.renderPathEntries();
+    }
+    async searchPath(query) {
+      const state = this.stateStack[this.stateStack.length - 1];
+      if (!state || state.type != "path") {
+        return;
+      }
+      state.query = query;
+      const token = ++this.pathToken;
+      this.fileTools.pending(true);
+      const entries = await this.loadPathEntries(state.path, query);
+      if (token != this.pathToken) {
+        return;
+      }
+      this.fileTools.pending(false);
+      this.pathEntries = entries;
+      this.renderPathEntries();
+    }
+    async loadPathEntries(path, query) {
+      try {
+        if (!query) {
+          return await this.readPath(path);
+        }
+        if (query.length < MIN_PATH_QUERY) {
+          return [];
+        }
+        return await this.findInPath(path, query);
+      } catch (e) {
+        console.warn("Cannot list path", path, query, e);
+        return [];
+      }
+    }
+    /** Contents of one directory (lsinfo). */
+    async readPath(path) {
+      const paths = await this.mpd.listPath(path);
+      return [...paths["directory"], ...paths["file"]].map((data) => createPathEntry(data));
+    }
+    /**
+     * Search the MPD database below `base`: folders and files whose name contains the query,
+     * plus songs whose Title tag contains it.
+     */
+    async findInPath(base, query) {
+      const [byFile, byTitle] = await Promise.all([
+        this.mpd.searchTag("file", query, base),
+        this.mpd.searchTag("Title", query, base)
+      ]);
+      const needle = query.toLowerCase();
+      const prefix2 = base ? `${base}/` : "";
+      const dirs = /* @__PURE__ */ new Map();
+      const files = /* @__PURE__ */ new Map();
+      byFile.forEach((song) => {
+        if (!song.file.startsWith(prefix2)) {
+          return;
+        }
+        const modified = parseDate(song["Last-Modified"]);
+        const segments = song.file.substring(prefix2.length).split("/");
+        const name = segments.pop();
+        let dir = base;
+        segments.forEach((segment) => {
+          dir = dir ? `${dir}/${segment}` : segment;
+          if (segment.toLowerCase().includes(needle)) {
+            dirs.set(dir, Math.max(dirs.get(dir) || 0, modified));
+          }
+        });
+        if (name.toLowerCase().includes(needle)) {
+          files.set(song.file, createSearchEntry(song, base));
+        }
+      });
+      byTitle.forEach((song) => {
+        if (!files.has(song.file)) {
+          files.set(song.file, createSearchEntry(song, base));
+        }
+      });
+      const dirEntries = [];
+      dirs.forEach((modified, directory) => {
+        const entry = createPathEntry({ directory }, base);
+        entry.modified = modified;
+        dirEntries.push(entry);
+      });
+      return [...dirEntries, ...files.values()];
+    }
+    renderPathEntries() {
+      const state = this.stateStack[this.stateStack.length - 1];
+      if (!state || state.type != "path") {
+        return;
+      }
+      this.selection.clear();
+      this.pathNodes.forEach((node2) => node2.remove());
+      const query = state.query || "";
+      const order = this.fileTools.sort;
+      const sorted = sortPathEntries(this.pathEntries, order);
+      const shown = sorted.slice(0, MAX_PATH_RESULTS);
+      const nodes = shown.map((entry) => {
+        const tokens = [];
+        entry.parent !== void 0 && tokens.push(entry.parent || "/");
+        order.key == "modified" && entry.modified && tokens.push(formatDate(entry.modified));
+        const node2 = new Path(entry.data, tokens.join(SEPARATOR));
+        if (entry.isDirectory) {
+          const path = entry.data.directory;
+          node2.addButton("chevron-double-right", () => this.pushState({ type: "path", path }));
         }
         return node2;
       });
-      this.append(...nodes);
+      let message = "";
+      if (query && query.length < MIN_PATH_QUERY) {
+        message = `Type at least ${MIN_PATH_QUERY} characters to search`;
+      } else if (query && sorted.length == 0) {
+        message = `Nothing found for \u201C${query}\u201D`;
+      } else if (sorted.length > shown.length) {
+        message = `Showing ${shown.length} of ${sorted.length} results, refine your search`;
+      }
+      this.pathNodes = [...nodes];
+      if (message) {
+        this.pathNodes.push(node("p", { className: "path-message" }, message));
+      }
+      this.append(...this.pathNodes);
       this.configureSelection(nodes);
     }
     async listSongs(filter) {
@@ -1818,7 +2094,7 @@
       let title = "";
       switch (backState.type) {
         case "path":
-          title = "..";
+          title = backState.query ? `Search: ${backState.query}` : "..";
           break;
         case "search":
           title = "Search";
@@ -1860,6 +2136,51 @@
   customElements.define("cyp-library", Library);
   function nonempty(str) {
     return str.length > 0;
+  }
+  function parseDate(str) {
+    const ms = str ? Date.parse(str) : NaN;
+    return isNaN(ms) ? 0 : ms;
+  }
+  function formatDate(ms) {
+    return new Date(ms).toLocaleString(void 0, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+  }
+  function createPathEntry(data, searchBase) {
+    const isDirectory = "directory" in data;
+    const uri = (isDirectory ? data.directory : data.file) || "";
+    const entry = {
+      data,
+      isDirectory,
+      name: fileName(uri),
+      modified: parseDate(data["Last-Modified"])
+    };
+    if (searchBase !== void 0) {
+      const prefix2 = searchBase ? `${searchBase}/` : "";
+      entry.parent = uri.substring(prefix2.length).split("/").slice(0, -1).join("/");
+    }
+    return entry;
+  }
+  function createSearchEntry(song, base) {
+    return createPathEntry({ file: song.file, "Last-Modified": song["Last-Modified"] }, base);
+  }
+  function sortPathEntries(entries, order) {
+    const sign = order.desc ? -1 : 1;
+    const uri = (entry) => entry.data.directory || entry.data.file || "";
+    return entries.slice().sort((a, b) => {
+      if (a.isDirectory != b.isDirectory) {
+        return a.isDirectory ? -1 : 1;
+      }
+      let diff = order.key == "modified" ? a.modified - b.modified : collator.compare(a.name, b.name);
+      if (diff) {
+        return diff * sign;
+      }
+      return collator.compare(a.name, b.name) || collator.compare(uri(a), uri(b));
+    });
   }
   function createEnqueueCommand(node2) {
     if (node2 instanceof Song || node2 instanceof Path) {

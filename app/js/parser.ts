@@ -8,12 +8,14 @@ export interface SongData {
 	AlbumArtist?: string;
 	Album?: string;
 	duration?: string;
+	"Last-Modified"?: string;
 }
 
 export interface PathData {
 	file?: string;
 	directory?: string;
 	playlist?: string;
+	"Last-Modified"?: string;
 }
 
 export interface StatusData {

@@ -1,0 +1,48 @@
+cyp-file-tools {
+	.item;
+	gap: 8px;
+
+	form {
+		.flex-row;
+		flex: auto;
+		min-width: 0;
+
+		.icon { margin-right: var(--icon-spacing); }
+
+		input {
+			flex: auto;
+			min-width: 0;
+		}
+	}
+
+	.sort {
+		.flex-row;
+		flex: none;
+		gap: 4px;
+
+		button {
+			margin-left: 0; // override .item button:first-of-type
+			padding: 4px 8px;
+			border-radius: 4px;
+			opacity: 0.7;
+
+			&.active {
+				opacity: 1;
+				color: var(--primary);
+				background-color: var(--primary-tint);
+			}
+
+			.icon {
+				width: 18px;
+				margin-left: 2px;
+			}
+		}
+	}
+
+	&.pending {
+		background-image: linear-gradient(var(--primary), var(--primary));
+		background-repeat: no-repeat;
+		background-size: 25% var(--border-width);
+		animation: bar ease-in-out 3s alternate infinite;
+	}
+}

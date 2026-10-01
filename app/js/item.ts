@@ -14,6 +14,8 @@ export default class Item extends HTMLElement {
 	}
 
 	matchPrefix(prefix: string) {
-		return (this.textContent || "").match(/\w+/g)!.some(word => word.toLowerCase().startsWith(prefix));
+		// split on whitespace and ASCII punctuation only, so non-latin words (é, ü, cyrillic…) stay intact
+		const words = (this.textContent || "").toLowerCase().split(/[\s!-\/:-@\[-`{-~·]+/);
+		return words.some(word => word.startsWith(prefix));
 	}
 }

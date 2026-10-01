@@ -114,6 +114,18 @@ export default class MPD {
 		return parser.songList(lines);
 	}
 
+	/**
+	 * Case-insensitive substring search of a single tag (or "file" for the song URI),
+	 * optionally restricted to songs below the `base` directory.
+	 */
+	async searchTag(tag: string, query: string, base = "") {
+		let parts = [`(${tag} contains "${escape(query)}")`];
+		base && parts.push(`(base "${escape(base)}")`);
+		let filterStr = `(${parts.join(" AND ")})`;
+		let lines = await this.command(`search "${escape(filterStr)}"`);
+		return parser.songList(lines);
+	}
+
 	async albumArt(songUrl: string) {
 		let data: number[] = [];
 		let offset = 0;
