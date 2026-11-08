@@ -1,26 +1,27 @@
 import Component from "../component.js";
+import * as html from "../html.js";
 
 
 class Menu extends Component {
-	protected tabs = Array.from(this.querySelectorAll<HTMLElement>("[data-for]"));
+	protected tabs = [...this.querySelectorAll<HTMLElement>("[data-for]")];
 
-	connectedCallback() {
+	override connectedCallback() {
 		super.connectedCallback();
 
 		this.tabs.forEach(tab => {
-			tab.addEventListener("click", _ => this.app.setAttribute("component", tab.dataset.for!));
+			tab.addEventListener("click", _ => this.app.setAttribute("component", tab.dataset["for"] ?? ""));
 		});
 	}
 
-	protected onAppLoad() {
+	protected override onAppLoad() {
 		this.app.addEventListener("queue-length-change", e => {
-			this.querySelector(".queue-length")!.textContent = `(${(e as CustomEvent).detail})`;
+			html.query(this, ".queue-length", HTMLElement).textContent = `(${e.detail})`;
 		});
 	}
 
-	protected onComponentChange(component: string) {
+	protected override onComponentChange(component: string) {
 		this.tabs.forEach(tab => {
-			tab.classList.toggle("active", tab.dataset.for == component);
+			tab.classList.toggle("active", tab.dataset["for"] == component);
 		});
 	}
 }

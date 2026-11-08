@@ -9,8 +9,10 @@
     "ws2mpd": "^2.4.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "esbuild": "^0.17.19",
-    "less": "^3.9.0"
+    "less": "^3.9.0",
+    "typescript": "^6.0.3"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

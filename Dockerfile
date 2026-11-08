@@ -5,7 +5,7 @@ RUN curl -L https://yt-dl.org/downloads/latest/youtube-dl -o /usr/local/bin/yout
 WORKDIR /cyp
 COPY package.json .
 RUN npm i
-COPY index.js .
+COPY index.js fetcher.js .
 COPY app ./app
 EXPOSE 8080
 ENTRYPOINT ["node", "."]

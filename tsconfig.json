@@ -1,0 +1,20 @@
+{
+	"compilerOptions": {
+		"target": "es2019",
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"types": ["node"],
+		"noEmit": true,
+		"strict": true,
+		"noImplicitReturns": true,
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noUncheckedIndexedAccess": true,
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"skipLibCheck": true
+	},
+	"include": ["index.ts", "fetcher.ts", "api.ts", "types/**/*.d.ts"]
+}

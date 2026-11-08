@@ -2,6 +2,8 @@ import * as html from "../html.js";
 
 
 export default class Search extends HTMLElement {
+	onSubmit: () => void = () => {};
+
 	constructor() {
 		super();
 
@@ -16,11 +18,10 @@ export default class Search extends HTMLElement {
 	}
 
 	get value() { return this.input.value.trim(); }
-	set value(value) { this.input.value = value; }
-	protected get input() { return this.querySelector<HTMLInputElement>("input")!; }
+	set value(value: string) { this.input.value = value; }
+	protected get input() { return html.query(this, "input", HTMLInputElement); }
 
-	onSubmit() {}
-	focus() { this.input.focus(); }
+	override focus() { this.input.focus(); }
 	pending(pending: boolean) { this.classList.toggle("pending", pending); }
 }
 

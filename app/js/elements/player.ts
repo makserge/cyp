@@ -2,52 +2,85 @@ import * as art from "../art.js";
 import * as html from "../html.js";
 import * as format from "../format.js";
 import Component from "../component.js";
-import { SongData, StatusData } from "../parser.js";
+import { isXRange, type XRange } from "../range.js";
+import type { SongData, StatusData } from "../parser.js";
 
 
 const ELAPSED_PERIOD = 500;
 
+// The parts of the player the page updates, looked up once
+interface PlayerDOM {
+	art: HTMLElement;
+	title: HTMLElement;
+	subtitle: HTMLElement;
+	elapsed: HTMLElement;
+	duration: HTMLElement;
+	progress: XRange;
+	volume: XRange;
+	mute: HTMLButtonElement;
+	play: HTMLButtonElement;
+	pause: HTMLButtonElement;
+	prev: HTMLButtonElement;
+	next: HTMLButtonElement;
+	random: HTMLButtonElement;
+	repeat: HTMLButtonElement;
+}
+
+function slider(root: ParentNode, selector: string): XRange {
+	const element = html.query(root, selector, HTMLElement);
+	if (!isXRange(element)) { throw new Error(`"${selector}" is not a slider`); }
+	return element;
+}
+
+function lookUpDOM(root: HTMLElement): PlayerDOM {
+	return {
+		art: html.query(root, ".art", HTMLElement),
+		title: html.query(root, ".info .title", HTMLElement),
+		subtitle: html.query(root, ".info .subtitle", HTMLElement),
+		elapsed: html.query(root, ".elapsed", HTMLElement),
+		duration: html.query(root, ".duration", HTMLElement),
+		progress: slider(root, ".timeline x-range"),
+		volume: slider(root, ".controls .volume x-range"),
+		mute: html.query(root, ".mute", HTMLButtonElement),
+		play: html.query(root, ".play", HTMLButtonElement),
+		pause: html.query(root, ".pause", HTMLButtonElement),
+		prev: html.query(root, ".prev", HTMLButtonElement),
+		next: html.query(root, ".next", HTMLButtonElement),
+		random: html.query(root, ".random", HTMLButtonElement),
+		repeat: html.query(root, ".repeat", HTMLButtonElement),
+	};
+}
+
 class Player extends Component {
-	protected current = {
-		song: {} as SongData,
+	protected current: { song: Partial<SongData>; elapsed: number; at: number; volume: number } = {
+		song: {},
 		elapsed: 0,
 		at: 0,
 		volume: 0
-	}
+	};
 	protected toggleVolume = 0;
-	protected DOM: Record<string, HTMLElement>;
+	protected DOM: PlayerDOM;
 
 	constructor() {
 		super();
-
-		const DOM: Record<string, HTMLElement> = {};
-		const all = this.querySelectorAll<HTMLElement>("[class]");
-		[...all].forEach(node => DOM[node.className] = node);
-		DOM.progress = DOM.timeline.querySelector("x-range")!;
-		DOM.volume = DOM.volume.querySelector("x-range")!;
-
-		this.DOM = DOM;
+		this.DOM = lookUpDOM(this);
 	}
 
-	handleEvent(e: CustomEvent) {
-		switch (e.type) {
-			case "idle-change":
-				let hasOptions = e.detail.includes("options");
-				let hasPlayer = e.detail.includes("player");
-				let hasMixer = e.detail.includes("mixer");
-				(hasOptions || hasPlayer || hasMixer) && this.updateStatus();
-				hasPlayer && this.updateCurrent();
-			break;
-		}
-	}
-
-	protected onAppLoad() {
+	protected override onAppLoad() {
 		this.addEvents();
 		this.updateStatus();
 		this.updateCurrent();
-		this.app.addEventListener("idle-change", this);
+		this.app.addEventListener("idle-change", e => this.onIdle(e.detail));
 
 		setInterval(() => this.updateElapsed(), ELAPSED_PERIOD);
+	}
+
+	protected onIdle(changed: string[]) {
+		const hasOptions = changed.includes("options");
+		const hasPlayer = changed.includes("player");
+		const hasMixer = changed.includes("mixer");
+		if (hasOptions || hasPlayer || hasMixer) { this.updateStatus(); }
+		if (hasPlayer) { this.updateCurrent(); }
 	}
 
 	protected async updateStatus() {
@@ -70,38 +103,38 @@ class Player extends Component {
 			DOM.title.textContent = data.Title || data.Name || format.fileName(data.file);
 			DOM.subtitle.textContent = format.subtitle(data, {duration:false});
 
-			let duration = Number(data.duration);
+			const duration = Number(data.duration);
 			if (duration) {
 				DOM.duration.textContent = format.time(duration);
-				(DOM.progress as HTMLInputElement).max = String(duration);
-				(DOM.progress as HTMLInputElement).disabled = false;
+				DOM.progress.max = String(duration);
+				DOM.progress.disabled = false;
 			} else {
 				DOM.duration.textContent = "";
-				(DOM.progress as HTMLInputElement).max = "0";
-				(DOM.progress as HTMLInputElement).disabled = true;
+				DOM.progress.max = "0";
+				DOM.progress.disabled = true;
 			}
 		} else {
 			DOM.title.textContent = "";
 			DOM.subtitle.textContent = "";
 			DOM.duration.textContent = "";
-			(DOM.progress as HTMLInputElement).max = "0";
-			(DOM.progress as HTMLInputElement).value = "0";
-			(DOM.progress as HTMLInputElement).disabled = true;
+			DOM.progress.max = "0";
+			DOM.progress.value = "0";
+			DOM.progress.disabled = true;
 		}
 		if (data.file != current.song.file) { // changed song
 			this.dispatchSongChange(data);
 		}
 
-		let artistNew = data.Artist || data.AlbumArtist || "";
-		let artistOld = current.song["Artist"] || current.song["AlbumArtist"];
-		let albumNew = data["Album"];
-		let albumOld = current.song["Album"];
+		const artistNew = data.Artist || data.AlbumArtist || "";
+		const artistOld = current.song.Artist || current.song.AlbumArtist;
+		const albumNew = data.Album;
+		const albumOld = current.song.Album;
 
 		Object.assign(current.song, data);
 
 		if (artistNew != artistOld || albumNew != albumOld) { // changed album (art)
 			html.clear(DOM.art);
-			let src = await art.get(mpd, artistNew, data.Album || "", data.file);
+			const src = await art.get(mpd, artistNew, data.Album || "", data.file);
 			if (src) {
 				html.node("img", {src}, "", DOM.art);
 			} else {
@@ -114,43 +147,42 @@ class Player extends Component {
 		const { current, DOM } = this;
 
 		let elapsed = 0;
-		if (current.song["file"]) {
+		if (current.song.file) {
 			elapsed = current.elapsed;
-			if (this.dataset.state == "play") { elapsed += (performance.now() - current.at)/1000; }
+			if (this.dataset["state"] == "play") { elapsed += (performance.now() - current.at)/1000; }
 		}
 
-		let progress = DOM.progress as HTMLInputElement;
-		progress.value = String(elapsed);
+		DOM.progress.value = String(elapsed);
 		DOM.elapsed.textContent = format.time(elapsed);
-		this.app.style.setProperty("--progress", String(elapsed/Number(progress.max)));
+		this.app.style.setProperty("--progress", String(elapsed/Number(DOM.progress.max)));
 	}
 
 	protected updateFlags(data: StatusData) {
-		let flags: string[] = [];
+		const flags: string[] = [];
 		if (data.random == "1") { flags.push("random"); }
 		if (data.repeat == "1") { flags.push("repeat"); }
 		if (data.volume === "0") { flags.push("mute"); } // strict, because volume might be missing
-		this.dataset.flags = flags.join(" ");
-		this.dataset.state = data["state"];
+		this.dataset["flags"] = flags.join(" ");
+		this.dataset["state"] = data.state ?? "";
 	}
 
 	protected updateVolume(data: StatusData) {
 		const { current, DOM } = this;
 
-		if ("volume" in data) {
-			let volume = Number(data.volume);
+		if (data.volume !== undefined) {
+			const volume = Number(data.volume);
 
-			(DOM.mute as HTMLInputElement).disabled = false;
-			(DOM.volume as HTMLInputElement).disabled = false;
-			(DOM.volume as HTMLInputElement).value = String(volume);
+			DOM.mute.disabled = false;
+			DOM.volume.disabled = false;
+			DOM.volume.value = String(volume);
 
 			if (volume == 0 && current.volume > 0) { this.toggleVolume = current.volume; } // muted
 			if (volume > 0 && current.volume == 0) { this.toggleVolume = 0; } // restored
 			current.volume = volume;
 		} else {
-			(DOM.mute as HTMLInputElement).disabled = true;
-			(DOM.volume as HTMLInputElement).disabled = true;
-			(DOM.volume as HTMLInputElement).value = String(50);
+			DOM.mute.disabled = true;
+			DOM.volume.disabled = true;
+			DOM.volume.value = String(50);
 		}
 	}
 
@@ -163,23 +195,28 @@ class Player extends Component {
 		DOM.next.addEventListener("click", _ => mpd.command("next"));
 
 		DOM.random.addEventListener("click", _ => {
-			let isRandom = this.dataset.flags!.split(" ").includes("random");
+			const isRandom = this.flags.includes("random");
 			mpd.command(`random ${isRandom ? "0" : "1"}`);
 		});
 		DOM.repeat.addEventListener("click", _ => {
-			let isRepeat = this.dataset.flags!.split(" ").includes("repeat");
+			const isRepeat = this.flags.includes("repeat");
 			mpd.command(`repeat ${isRepeat ? "0" : "1"}`);
 		});
 
-		DOM.progress.addEventListener("input", e => {
-			let elapsed = (e.target as HTMLInputElement).valueAsNumber;
+		DOM.progress.addEventListener("input", _ => {
+			const elapsed = DOM.progress.valueAsNumber;
 			current.elapsed = elapsed;
 			current.at = performance.now();
 			mpd.command(`seekcur ${elapsed}`);
 		});
 
-		DOM.volume.addEventListener("input", e => mpd.command(`setvol ${(e.target as HTMLInputElement).valueAsNumber}`));
+		DOM.volume.addEventListener("input", _ => mpd.command(`setvol ${DOM.volume.valueAsNumber}`));
 		DOM.mute.addEventListener("click", () => mpd.command(`setvol ${this.toggleVolume}`));
+	}
+
+	// the flags the server reported, e.g. "random repeat"
+	protected get flags(): string[] {
+		return (this.dataset["flags"] ?? "").split(" ");
 	}
 
 	protected dispatchSongChange(detail: SongData) {

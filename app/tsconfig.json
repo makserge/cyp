@@ -1,14 +1,21 @@
 {
 	"compilerOptions": {
-//		"allowJs": true,
-//		"checkJs": true,
-		"noEmit": true,
-//		"lib": ["es2017", "dom"],
 		"target": "es2017",
-		"baseUrl": "js",
+		"lib": ["es2017", "dom", "dom.iterable"],
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"noEmit": true,
 		"strict": true,
 		"noImplicitReturns": true,
-		"strictFunctionTypes": true
+		"noImplicitOverride": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noUncheckedIndexedAccess": true,
+		"noPropertyAccessFromIndexSignature": true,
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"skipLibCheck": true
 	},
-	"files": ["js/cyp.ts"]
+	"include": ["js/**/*.ts"]
 }

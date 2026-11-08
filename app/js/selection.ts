@@ -3,17 +3,18 @@ import * as html from "./html.js";
 
 type Mode = "single" | "multi";
 
-interface Command {
-	cb: Function;
+export interface Command {
+	// gets the selected items; each caller narrows them to the kind it configured
+	cb: (items: HTMLElement[]) => unknown;
 	label: string;
 	icon: string;
 	className?: string;
-};
+}
 
 export default class Selection {
 	readonly commands = new Commands();
 	protected items: HTMLElement[] = [];
-	protected mode!: Mode;
+	protected mode: Mode = "multi";
 
 	constructor() {
 		this.hide();
@@ -22,7 +23,7 @@ export default class Selection {
 	configure(items: HTMLElement[], mode: Mode, commands: Command[]) {
 		this.mode = mode;
 
-		let allCommands: Command[] = [];
+		const allCommands: Command[] = [];
 
 		if (mode == "multi") {
 			allCommands.push({
@@ -41,11 +42,10 @@ export default class Selection {
 			className: "last"
 		});
 
-		let buttons = allCommands.map(command => {
-			let button = buildButton(command);
+		const buttons = allCommands.map(command => {
+			const button = buildButton(command);
 			button.addEventListener("click", _ => {
-				const arg = (mode == "single" ? this.items[0] : this.items);
-				command.cb(arg);
+				command.cb([...this.items]);
 			});
 			return button;
 		});
@@ -61,7 +61,7 @@ export default class Selection {
 	}
 
 	clear() {
-		while (this.items.length) { this.remove(this.items[0]); }
+		for (const item of [...this.items]) { this.remove(item); }
 	}
 
 	protected toggle(node: HTMLElement) {
@@ -78,13 +78,15 @@ export default class Selection {
 		this.items.push(node);
 		node.classList.add("selected");
 
-		if (this.mode == "single" && length > 0) { this.remove(this.items[0]); }
+		const first = this.items[0];
+		if (this.mode == "single" && length > 0 && first) { this.remove(first); }
 
 		if (length == 0) { this.show(); }
 	}
 
 	protected remove(node: HTMLElement) {
 		const index = this.items.indexOf(node);
+		if (index < 0) { return; }
 		this.items.splice(index, 1);
 		node.classList.remove("selected");
 		if (this.items.length == 0) { this.hide(); }

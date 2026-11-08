@@ -1,7 +1,7 @@
 import * as format from "../format.js";
 import * as html from "../html.js";
 import Item from "../item.js";
-import { SongData } from "../parser.js";
+import type { SongData } from "../parser.js";
 
 
 export default class Song extends Item {
@@ -30,8 +30,8 @@ export default class Song extends Item {
 		this.playing = false;
 	}
 
-	get file() { return this.data.file; }
-	get songId() { return this.data.Id; }
+	get file(): string { return this.data.file; }
+	get songId(): string { return this.data.Id ?? ""; }
 
 	set playing(playing: boolean) {
 		this.classList.toggle("playing", playing);

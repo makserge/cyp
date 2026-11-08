@@ -1,5 +1,6 @@
 import Component from "../component.js";
 import * as conf from "../conf.js";
+import * as html from "../html.js";
 
 
 const prefix = "cyp";
@@ -9,28 +10,25 @@ function loadFromStorage(key: string) {
 }
 
 function saveToStorage(key: string, value: string | number) {
-	return localStorage.setItem(`${prefix}-${key}`, String(value));
+	localStorage.setItem(`${prefix}-${key}`, String(value));
 }
 
 class Settings extends Component {
-	protected inputs = {
-		theme: this.querySelector<HTMLSelectElement>("[name=theme]")!,
-		ytLimit: this.querySelector<HTMLSelectElement>("[name=yt-limit]")!,
-		color: [...this.querySelectorAll<HTMLInputElement>("[name=color]")]
-	};
+	protected theme = html.query(this, "[name=theme]", HTMLSelectElement);
+	protected ytLimit = html.query(this, "[name=yt-limit]", HTMLSelectElement);
+	protected colors = [...this.querySelectorAll("[name=color]")]
+		.filter((input): input is HTMLInputElement => input instanceof HTMLInputElement);
 
-	protected onAppLoad() {
-		const { inputs } = this;
-
-		let mo = new MutationObserver(mrs => {
-			mrs.forEach(mr => this._onAppAttributeChange(mr));
+	protected override onAppLoad() {
+		const mo = new MutationObserver(mrs => {
+			mrs.forEach(mr => this.onAppAttributeChange(mr));
 		});
 		mo.observe(this.app, {attributes:true});
 
-		inputs.theme.addEventListener("change", e => this.setTheme((e.target as HTMLSelectElement).value));
-		inputs.ytLimit.addEventListener("change", e => this.setYtLimit(Number((e.target as HTMLSelectElement).value)));
-		inputs.color.forEach(input => {
-			input.addEventListener("click", e => this.setColor((e.target as HTMLInputElement).value));
+		this.theme.addEventListener("change", _ => this.setTheme(this.theme.value));
+		this.ytLimit.addEventListener("change", _ => this.setYtLimit(Number(this.ytLimit.value)));
+		this.colors.forEach(input => {
+			input.addEventListener("click", _ => this.setColor(input.value));
 		});
 
 		const theme = loadFromStorage("theme");
@@ -43,19 +41,19 @@ class Settings extends Component {
 		this.setYtLimit(Number(ytLimit));
 	}
 
-	_onAppAttributeChange(mr: MutationRecord) {
+	protected onAppAttributeChange(mr: MutationRecord) {
 		if (mr.attributeName == "theme") { this.syncTheme(); }
 		if (mr.attributeName == "color") { this.syncColor(); }
 	}
 
 	protected syncTheme() {
-		this.inputs.theme.value = this.app.getAttribute("theme")!;
+		this.theme.value = this.app.getAttribute("theme") ?? "";
 	}
 
 	protected syncColor() {
-		this.inputs.color.forEach(input => {
+		this.colors.forEach(input => {
 			input.checked = (input.value == this.app.getAttribute("color"));
-			input.parentElement!.style.color = input.value;
+			if (input.parentElement) { input.parentElement.style.color = input.value; }
 		});
 	}
 
@@ -74,7 +72,7 @@ class Settings extends Component {
 		conf.setYtLimit(ytLimit);
 	}
 
-	protected onComponentChange(c: string, isThis: boolean) {
+	protected override onComponentChange(_c: string, isThis: boolean) {
 		this.hidden = !isThis;
 	}
 }

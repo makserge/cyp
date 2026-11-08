@@ -2,7 +2,7 @@ import * as html from "./html.js";
 
 
 export default class Item extends HTMLElement {
-	addButton(icon: string, cb: Function) {
+	addButton(icon: string, cb: () => unknown) {
 		html.button({icon}, "", this).addEventListener("click", e => {
 			e.stopPropagation(); // do not select/activate/whatever
 			cb();
@@ -15,7 +15,7 @@ export default class Item extends HTMLElement {
 
 	matchPrefix(prefix: string) {
 		// split on whitespace and ASCII punctuation only, so non-latin words (é, ü, cyrillic…) stay intact
-		const words = (this.textContent || "").toLowerCase().split(/[\s!-\/:-@\[-`{-~·]+/);
+		const words = (this.textContent ?? "").toLowerCase().split(/[\s!-\/:-@\[-`{-~·]+/);
 		return words.some(word => word.startsWith(prefix));
 	}
 }

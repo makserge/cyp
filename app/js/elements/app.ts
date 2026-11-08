@@ -4,17 +4,29 @@ import Selection from "../selection.js";
 import * as conf from "../conf.js";
 
 
+// Set by the System shutdown button (index.html) before the request is sent
+function isShuttingDown(): boolean {
+	return conf.shuttingDown;
+}
+
 function initIcons() {
-	[...document.querySelectorAll<HTMLElement>("[data-icon]")].forEach(node => {
-		node.dataset.icon!.split(" ").forEach(name => {
-			let icon = html.icon(name);
-			node.prepend(icon);
+	document.querySelectorAll<HTMLElement>("[data-icon]").forEach(node => {
+		(node.dataset["icon"] ?? "").split(" ").forEach(name => {
+			node.prepend(html.icon(name));
 		});
 	});
 }
 
+interface YoutubeSettings {
+	youtubeDir: string;
+}
+
+function isYoutubeSettings(data: unknown): data is YoutubeSettings {
+	return typeof data == "object" && data !== null && "youtubeDir" in data && typeof data.youtubeDir == "string";
+}
+
 export default class App extends HTMLElement {
-	mpd!: MPD;
+	protected _mpd?: MPD;
 
 	static get observedAttributes() { return ["component"]; }
 
@@ -23,10 +35,16 @@ export default class App extends HTMLElement {
 		initIcons();
 	}
 
+	// Available once the app has connected (components use it after the "load" event)
+	get mpd(): MPD {
+		if (!this._mpd) { throw new Error("not connected to MPD yet"); }
+		return this._mpd;
+	}
+
 	async connectedCallback() {
 		await waitForChildren(this);
 
-		window.addEventListener("hashchange", e => this.onHashChange());
+		window.addEventListener("hashchange", _ => this.onHashChange());
 		this.onHashChange();
 
 		await loadSettings();
@@ -37,22 +55,21 @@ export default class App extends HTMLElement {
 		this.initMediaHandler();
 	}
 
-	attributeChangedCallback(name: string, oldValue: string, newValue: string) {
+	attributeChangedCallback(name: string, _oldValue: string | null, newValue: string | null) {
 		switch (name) {
 			case "component":
-				location.hash = newValue;
-				const e = new CustomEvent("component-change");
-				this.dispatchEvent(e);
+				location.hash = newValue ?? "";
+				this.dispatchEvent(new CustomEvent("component-change"));
 			break;
 		}
 	}
 
 	get component() { return this.getAttribute("component") || ""; }
-	set component(component) { this.setAttribute("component", component); }
+	set component(component: string) { this.setAttribute("component", component); }
 
 	createSelection() {
-		let selection = new Selection();
-		this.querySelector("footer")!.append(selection.commands);
+		const selection = new Selection();
+		html.query(this, "footer", HTMLElement).append(selection.commands);
 		return selection;
 	}
 
@@ -61,9 +78,13 @@ export default class App extends HTMLElement {
 		if (component != this.component) { this.component = component; }
 	}
 
-	protected onChange(changed: string[]) { this.dispatchEvent(new CustomEvent("idle-change", {detail:changed})); }
+	protected onChange(changed: string[]) {
+		this.dispatchEvent(new CustomEvent("idle-change", {detail: changed}));
+	}
 
-	protected async onClose(e: CloseEvent) {
+	protected async onClose(_e: CloseEvent) {
+		// A shutdown was requested: the connection closing is expected, so do not reconnect
+		if (isShuttingDown()) { return; }
 		await sleep(3000);
 		this.connect();
 	}
@@ -72,15 +93,16 @@ export default class App extends HTMLElement {
 		const attempts = 3;
 		for (let i=0;i<attempts;i++) {
 			try {
-				let mpd = await MPD.connect();
+				const mpd = await MPD.connect();
 				mpd.onChange = changed => this.onChange(changed);
 				mpd.onClose = e => this.onClose(e);
-				this.mpd = mpd;
+				this._mpd = mpd;
 				return;
 			} catch (e) {
 				await sleep(500);
 			}
 		}
+		if (isShuttingDown()) { return; }
 		alert(`Failed to connect to MPD after ${attempts} attempts. Please reload the page to try again.`);
 	}
 
@@ -107,20 +129,20 @@ export default class App extends HTMLElement {
 
 		// mediaSession define action handlers
 		navigator.mediaSession.setActionHandler('play', () => {
-			this.mpd.command("play")
-			audio.play()
+			this.mpd.command("play");
+			audio.play();
 		});
 		navigator.mediaSession.setActionHandler('pause', () => {
-			this.mpd.command("pause 1")
-			audio.pause()
+			this.mpd.command("pause 1");
+			audio.pause();
 		});
 		navigator.mediaSession.setActionHandler('previoustrack', () => {
-			this.mpd.command("previous")
-			audio.play()
+			this.mpd.command("previous");
+			audio.play();
 		});
 		navigator.mediaSession.setActionHandler('nexttrack', () => {
-			this.mpd.command("next")
-			audio.play()
+			this.mpd.command("next");
+			audio.play();
 		});
 	}
 }
@@ -141,6 +163,6 @@ function waitForChildren(app: App) {
 
 async function loadSettings() {
 	const response = await fetch("settings");
-	const settings = await response.json();
-	if (settings.youtubeDir) { conf.setYtPath(settings.youtubeDir); }
+	const settings: unknown = await response.json();
+	if (isYoutubeSettings(settings)) { conf.setYtPath(settings.youtubeDir); }
 }

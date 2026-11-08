@@ -16,6 +16,10 @@ CYP is a web-based frontend for [MPD](https://www.musicpd.org/), the Music Playe
   - Dark/Light themes
 
 
+## Development
+
+The page (`app/js`) and the server (`index.ts`, `fetcher.ts`, shared types in `api.ts`) are TypeScript. `make` type-checks both and rebuilds the files that are committed as JavaScript: `app/cyp.js`, `index.js`, `fetcher.js` and `app/cyp.css`. Run it after changing any source, then commit the built files too, so `node .` keeps working without a build step.
+
 ## Installation
 
 Make sure you have a working MPD setup first and Node version >= 10
@@ -29,6 +33,30 @@ node .
 Point your browser to http://localhost:8080 to open the interface. Specifying a custom MPD address can be done:
   1. using `MPD_HOST` and `MPD_PORT` environment variables, or
   1. via a `server` querystring argument (`?server=localhost:6655`).
+
+### Other programs
+
+Optional tools used by some features. Install them on the machine that runs cyp:
+
+- `mpc` - the MPD command-line client. Needed for the second sync to refresh the library after new files arrive.
+- `yt-dlp` - YouTube downloads (set `YOUTUBE` to another command if needed; `youtube-dl` is no longer maintained).
+- `jq` - used by YouTube search.
+- `rsgain` - optional, for auto gain: writes ReplayGain tags to the files the second sync copies (see below).
+
+Example on Debian or Raspberry Pi OS: `sudo apt install mpc jq` and `pip install -U yt-dlp`. rsgain is in the package list of many distributions and at https://github.com/complexlogic/rsgain.
+
+### Folder permissions
+
+cyp runs as a normal user. The second sync writes new files into the MPD music folder, so that user needs write access there. Without it the sync stops at once with "cyp cannot write to ...".
+
+On Debian, MPD's music folder is often owned by `mpd` and not writable by others. One way to fix it: add the cyp user to the `mpd` group and make the folder group-writable:
+
+```sh
+sudo usermod -aG mpd $USER          # log out and in afterwards
+sudo chmod g+w /var/lib/mpd/music  # or your music_directory
+```
+
+Check with `test -w /var/lib/mpd/music && echo writable`. If you run cyp in Docker, mount the music folder read-write.
 
 ## Instalation - Docker
 
@@ -86,17 +114,23 @@ To present CYP in a virutal folder named "music" (https://example.com/music/) ad
 
 
 
-## Youtube-dl integration
+## YouTube integration
 
-You will need a working [youtube-dl](https://ytdl-org.github.io/youtube-dl/index.html) installation. Audio files are downloaded into the `_youtube` directory, so make sure it is available to your MPD library (use a symlink).
+You need a working [yt-dlp](https://github.com/yt-dlp/yt-dlp) installation (set `YOUTUBE` to another command if needed; the older youtube-dl is no longer maintained). Audio is downloaded into `_youtube` inside the MPD music folder (`music_directory` from `/etc/mpd.conf`), so MPD can play it right away. The name can be changed with `YOUTUBE_DIR`, which can be relative to the music folder or an absolute path inside it.
 
-If you use Docker, you need to mount the `_youtube` directory into the image:
+If you use Docker, mount the MPD music folder into the container.
 
-```sh
-docker run --network=host -v "$(pwd)"/_youtube:/cyp/_youtube cyp
-```
+## Second sync (fetcher)
 
-The download directory name (`_youtube` by default) can be changed with a `YOUTUBE_DIR` environment variable.
+The server part is written in TypeScript (`fetcher.ts`) and compiled to `fetcher.js` by `make`. Run `make` again after changing it.
+
+Set it up in the Settings page, section **Second sync (from the device app)**: enable it, enter the car app's address and key, then **Save** and **Sync now**. The result appears in the read-only box below the buttons, one item per line.
+
+cyp can pull audio files from the RSS Downloader phone app over the local network. It copies new files into the MPD music folder (the default, from `music_directory`, can be changed), keeping the folder structure of the device app (`Album/CD 1/01.mp3` lands in the same subfolders), tags them with ReplayGain when `rsgain` is enabled, and runs `mpc update` on the folder so MPD sees them. Settings are stored in `fetch.json` (created on first save; the key is kept there, readable only by the owner).
+
+Endpoints: `GET /fetch/settings`, `POST /fetch/settings` (JSON: `enabled`, `url`, `key`, `dir`, `intervalMinutes`, `rsgain`), `POST /fetch/run`. Automatic runs check every minute and sync when the interval has passed.
+
+`rsgain` needs the [rsgain](https://github.com/complexlogic/rsgain) command-line tool, and `mpc` must be installed. With auto gain on, cyp runs `rsgain easy <folder>` on the whole synced folder after each sync that added files. Check that your rsgain version skips files that already have ReplayGain tags; otherwise a large folder takes a long time on every sync.
 
 ## Changing the port
 

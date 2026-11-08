@@ -5,7 +5,7 @@
 		<meta name="viewport" content="width=device-width" />
 		<title>Control Your Player</title>
 		<link rel="stylesheet" href="cyp.css" />
-		<link rel="icon" href="https://emojimage.deno.dev/🎵" />
+		<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎵%3C/text%3E%3C/svg%3E" />
 		<meta name="mobile-web-app-capable" content="yes" />
 	</head>
 	<body>
@@ -80,10 +80,35 @@
 						</select>
 					</dd>
 				</dl>
-				<div class="system-actions">
+				<div class="action-buttons">
 					<button id="refresh-btn" type="button">Refresh content</button>
 					<button id="shutdown-btn" type="button">System shutdown</button>
 				</div>
+				<section class="fetch-settings">
+					<h3>App sync</h3>
+					<label><input type="checkbox" id="fetch-enabled" /> Enabled</label>
+					<dl>
+						<dt>Device address</dt>
+						<dd><input id="fetch-url" type="url" placeholder="http://192.168.1.20:47831" /></dd>
+						<dt>Key</dt>
+						<dd>
+							<input id="fetch-key" type="password" autocomplete="off" />
+							<button id="fetch-key-toggle" class="fetch-key-toggle" type="button">Show</button>
+						</dd>
+						<dt>Folder</dt>
+						<dd><input id="fetch-dir" type="text" placeholder="MPD music folder" /></dd>
+						<dt>Check every (minutes)</dt>
+						<dd><input id="fetch-interval" type="number" min="5" max="1440" step="1" /></dd>
+						<dt>Auto gain</dt>
+						<dd><label><input type="checkbox" id="fetch-rsgain" /> Write ReplayGain tags (needs rsgain)</label></dd>
+					</dl>
+					<div class="action-buttons">
+						<button id="fetch-save" type="button">Save</button>
+						<button id="fetch-run" type="button">Sync now</button>
+					</div>
+					<div id="fetch-status" class="fetch-status"></div>
+					<div id="fetch-result" class="fetch-result" role="status" aria-live="polite"></div>
+				</section>
 			</cyp-settings>
 		</main>
 		<footer>
@@ -102,59 +127,6 @@
 		</footer>
 		</cyp-app>
 
-		<script type="module" src="cyp.js?2"></script>
-		<script type="module">
-			const refreshBtn = document.getElementById("refresh-btn");
-			const shutdownBtn = document.getElementById("shutdown-btn");
-
-			refreshBtn.addEventListener("click", async () => {
-				refreshBtn.disabled = true;
-				const original = refreshBtn.textContent;
-				refreshBtn.textContent = "Refreshing…";
-				try {
-					const res = await fetch("/refresh", { method: "POST" });
-					const data = await res.json();
-					refreshBtn.textContent = data.ok ? "Done!" : "Failed";
-				} catch (e) {
-					refreshBtn.textContent = "Failed";
-				} finally {
-					setTimeout(() => {
-						refreshBtn.disabled = false;
-						refreshBtn.textContent = original;
-					}, 2000);
-				}
-			});
-
-			async function isHostAlive() {
-				const controller = new AbortController();
-				const timeout = setTimeout(() => controller.abort(), 2000);
-				try {
-					await fetch("/settings", { method: "GET", cache: "no-store", signal: controller.signal });
-					return true;
-				} catch (e) {
-					return false;
-				} finally {
-					clearTimeout(timeout);
-				}
-			}
-
-			function watchForShutdown() {
-				const pingInterval = setInterval(async () => {
-					const alive = await isHostAlive();
-					if (!alive) {
-						clearInterval(pingInterval);
-						shutdownBtn.textContent = "Switched off";
-					}
-				}, 2000);
-			}
-
-			shutdownBtn.addEventListener("click", async () => {
-				if (!confirm("Shut down the system now?")) { return; }
-				shutdownBtn.disabled = true;
-				shutdownBtn.textContent = "Shutting down…";
-				await fetch("/shutdown", { method: "POST" });
-				watchForShutdown();
-			});
-		</script>
+		<script type="module" src="cyp.js?3"></script>
 	</body>
 </html>

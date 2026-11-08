@@ -1,7 +1,10 @@
 import App from "./elements/app.js";
+import type Selection from "./selection.js";
 
 
-export default class Component extends HTMLElement {
+export default abstract class Component extends HTMLElement {
+	private _selection?: Selection;
+
 	connectedCallback() {
 		const { app } = this;
 
@@ -13,9 +16,19 @@ export default class Component extends HTMLElement {
 		});
 	}
 
-	protected get app() { return this.closest<App>("cyp-app")!; }
+	protected get app(): App {
+		const app = this.closest("cyp-app");
+		if (!(app instanceof App)) { throw new Error(`${this.nodeName} is not inside cyp-app`); }
+		return app;
+	}
+
 	protected get mpd() { return this.app.mpd; }
 
-	protected onAppLoad() {}
-	protected onComponentChange(component: string, isThis: boolean) {}
+	// The selection bar of the footer, created on first use
+	protected get selection(): Selection {
+		return this._selection ??= this.app.createSelection();
+	}
+
+	protected onAppLoad(): void {}
+	protected onComponentChange(_component: string, _isThis: boolean): void {}
 }

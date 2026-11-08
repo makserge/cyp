@@ -1,9 +1,13 @@
+// Parsing of MPD's text replies ("Key: value" lines) into typed records.
+
 export type Struct = Record<string, string | string[]>;
+
 export interface SongData {
-	Id: string;
 	file: string;
+	Id?: string;
 	Track?: string;
 	Title?: string;
+	Name?: string; // internet radio streams
 	Artist?: string;
 	AlbumArtist?: string;
 	Album?: string;
@@ -18,77 +22,89 @@ export interface PathData {
 	"Last-Modified"?: string;
 }
 
+export interface PathContents {
+	file: PathData[];
+	directory: PathData[];
+	playlist: PathData[];
+}
+
 export interface StatusData {
 	random?: string;
 	repeat?: string;
 	volume?: string;
 	state?: string;
 	elapsed?: string;
+	duration?: string;
 }
 
+// The one place that trusts MPD's reply shape: each record is read as T by the caller
 export function linesToStruct<T = Struct>(lines: string[]): T {
-	let result: Struct = {};
+	const result: Struct = {};
 
-	lines.forEach(line => {
-		let cindex = line.indexOf(":");
+	for (const line of lines) {
+		const cindex = line.indexOf(":");
 		if (cindex == -1) { throw new Error(`Malformed line "${line}"`); }
-		let key = line.substring(0, cindex);
-		let value = line.substring(cindex+2);
-		if (key in result) {
-			let old = result[key];
-			if (old instanceof Array) {
-				old.push(value);
-			} else {
-				result[key] = [old!, value];
-			}
-		} else {
+		const key = line.substring(0, cindex);
+		const value = line.substring(cindex+2);
+
+		const old = result[key];
+		if (old === undefined) {
 			result[key] = value;
+		} else if (Array.isArray(old)) {
+			old.push(value);
+		} else {
+			result[key] = [old, value];
 		}
-	});
+	}
 	return result as T;
 }
 
-export function songList(lines: string[]) {
-	let songs: SongData[] = [];
+export function songList(lines: string[]): SongData[] {
+	const songs: SongData[] = [];
 	let batch: string[] = [];
-	while (lines.length) {
-		let line = lines[0];
+
+	for (const line of lines) {
 		if (line.startsWith("file:") && batch.length) {
-			let song = linesToStruct<SongData>(batch);
-			songs.push(song);
+			songs.push(linesToStruct<SongData>(batch));
 			batch = [];
 		}
-		batch.push(lines.shift()!);
+		batch.push(line);
 	}
 
-	if (batch.length) {
-		let song = linesToStruct<SongData>(batch);
-		songs.push(song);
-	}
-
+	if (batch.length) { songs.push(linesToStruct<SongData>(batch)); }
 	return songs;
 }
 
-export function pathContents(lines: string[]) {
-	const prefixes = ["file", "directory", "playlist"];
+type PathKind = keyof PathContents;
 
+function pathKind(prefix: string): PathKind | null {
+	switch (prefix) {
+		case "file": return "file";
+		case "directory": return "directory";
+		case "playlist": return "playlist";
+		default: return null;
+	}
+}
+
+export function pathContents(lines: string[]): PathContents {
+	const result: PathContents = { file: [], directory: [], playlist: [] };
 	let batch: string[] = [];
-	let result: Record<string, PathData[]> = {};
-	let batchPrefix = "";
-	prefixes.forEach(prefix => result[prefix] = []);
+	let batchKind: PathKind | null = null;
 
-	while (lines.length) {
-		let line = lines[0];
-		let prefix = line.split(":")[0];
-		if (prefixes.includes(prefix)) { // begin of a new batch
-			if (batch.length) { result[batchPrefix].push(linesToStruct<PathData>(batch)); }
-			batchPrefix = prefix;
+	const flush = () => {
+		if (batch.length && batchKind) { result[batchKind].push(linesToStruct<PathData>(batch)); }
+	};
+
+	for (const line of lines) {
+		const kind = pathKind(line.split(":")[0] ?? "");
+		if (kind) { // begin of a new batch
+			flush();
+			batchKind = kind;
 			batch = [];
 		}
-		batch.push(lines.shift()!);
+		batch.push(line);
 	}
 
-	if (batch.length) { result[batchPrefix].push(linesToStruct<PathData>(batch)); }
-
+	flush();
 	return result;
 }

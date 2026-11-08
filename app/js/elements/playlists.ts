@@ -4,39 +4,38 @@ import Playlist from "./playlist.js";
 import { escape } from "../mpd.js";
 import Song from "./song.js";
 import Back from "./back.js";
-import Selection from "../selection.js";
-import { SongData } from "../parser.js";
+import type { SongData } from "../parser.js";
 
+
+function songsOf(items: HTMLElement[]): Song[] {
+	return items.filter((item): item is Song => item instanceof Song);
+}
+
+function playlistsOf(items: HTMLElement[]): Playlist[] {
+	return items.filter((item): item is Playlist => item instanceof Playlist);
+}
 
 class Playlists extends Component {
-	protected selection!: Selection;
 	protected current?: string;
 
-	handleEvent(e: CustomEvent) {
-		switch (e.type) {
-			case "idle-change":
-				e.detail.includes("stored_playlist") && this.sync();
-			break;
-		}
-	}
-
-	protected onAppLoad() {
+	protected override onAppLoad() {
 		const { app } = this;
-		this.selection = app.createSelection();
-		app.addEventListener("idle-change", this);
+		app.addEventListener("idle-change", e => {
+			if (e.detail.includes("stored_playlist")) { this.sync(); }
+		});
 		this.sync();
 	}
 
-	protected onComponentChange(c: string, isThis: boolean) {
+	protected override onComponentChange(_c: string, isThis: boolean) {
 		this.hidden = !isThis;
 	}
 
 	protected async sync() {
 		if (this.current) {
-			let songs = await this.mpd.listPlaylistItems(this.current);
+			const songs = await this.mpd.listPlaylistItems(this.current);
 			this.buildSongs(songs);
 		} else {
-			let lists = await this.mpd.listPlaylists();
+			const lists = await this.mpd.listPlaylists();
 			this.buildLists(lists);
 		}
 	}
@@ -45,7 +44,7 @@ class Playlists extends Component {
 		html.clear(this);
 		this.buildBack();
 
-		let nodes = songs.map(song => new Song(song));
+		const nodes = songs.map(song => new Song(song));
 		this.append(...nodes);
 
 		this.configureSelectionSongs(nodes);
@@ -54,8 +53,8 @@ class Playlists extends Component {
 	protected buildLists(lists: string[]) {
 		html.clear(this);
 
-		let playlists = lists.map(name => {
-			let node = new Playlist(name);
+		const playlists = lists.map(name => {
+			const node = new Playlist(name);
 			node.addButton("chevron-double-right", () => {
 				this.current = name;
 				this.sync();
@@ -73,22 +72,22 @@ class Playlists extends Component {
 		node.onclick = () => {
 			this.current = undefined;
 			this.sync();
-		}
+		};
 	}
 
 	protected configureSelectionSongs(songs: Song[]) {
 		const { selection, mpd } = this;
 
-		let commands = [{
-			cb: async (items: Song[]) => {
-				await mpd.command(["clear", ...items.map(createAddCommand), "play"]);
+		const commands = [{
+			cb: async (items: HTMLElement[]) => {
+				await mpd.command(["clear", ...songsOf(items).map(createAddCommand), "play"]);
 				selection.clear(); // fixme notification?
 			},
 			label:"Play",
 			icon:"play"
 		}, {
-			cb: async (items: Song[]) => {
-				await mpd.command(items.map(createAddCommand));
+			cb: async (items: HTMLElement[]) => {
+				await mpd.command(songsOf(items).map(createAddCommand));
 				selection.clear(); // fixme notification?
 			},
 			label:"Enqueue",
@@ -98,32 +97,36 @@ class Playlists extends Component {
 		selection.configure(songs, "multi", commands);
 	}
 
+	// Single selection: the callbacks act on the one selected playlist
 	protected configureSelectionLists(lists: Playlist[]) {
 		const { mpd, selection } = this;
 
-		let commands = [{
-			cb: async (item: Playlist) => {
-				const name = item.name;
-				const commands = ["clear", `load "${escape(name)}"`, "play"];
+		const commands = [{
+			cb: async (items: HTMLElement[]) => {
+				const item = playlistsOf(items)[0];
+				if (!item) { return; }
+				const commands = ["clear", `load "${escape(item.name)}"`, "play"];
 				await mpd.command(commands);
 				selection.clear(); // fixme notification?
 			},
 			label:"Play",
 			icon:"play"
 		}, {
-			cb: async (item: Playlist) => {
-				const name = item.name;
-				await mpd.command(`load "${escape(name)}"`);
+			cb: async (items: HTMLElement[]) => {
+				const item = playlistsOf(items)[0];
+				if (!item) { return; }
+				await mpd.command(`load "${escape(item.name)}"`);
 				selection.clear(); // fixme notification?
 			},
 			label:"Enqueue",
 			icon:"plus"
 		}, {
-			cb: async (item: Playlist) => {
-				const name = item.name;
-				if (!confirm(`Really delete playlist '${name}'?`)) { return; }
+			cb: async (items: HTMLElement[]) => {
+				const item = playlistsOf(items)[0];
+				if (!item) { return; }
+				if (!confirm(`Really delete playlist '${item.name}'?`)) { return; }
 
-				await mpd.command(`rm "${escape(name)}"`);
+				await mpd.command(`rm "${escape(item.name)}"`);
 			},
 			label:"Delete",
 			icon:"delete"

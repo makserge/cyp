@@ -7,6 +7,7 @@ export interface SortOrder {
 	desc: boolean;
 }
 
+const SORT_KEYS: readonly SortKey[] = ["name", "modified"];
 const STORAGE_KEY = "cyp-library-sort";
 const DEBOUNCE = 400;
 const LABELS: Record<SortKey, string> = {
@@ -14,12 +15,16 @@ const LABELS: Record<SortKey, string> = {
 	modified: "Date"
 };
 
+function isSortOrder(data: unknown): data is SortOrder {
+	return typeof data == "object" && data !== null
+		&& "key" in data && (data.key == "name" || data.key == "modified")
+		&& "desc" in data && typeof data.desc == "boolean";
+}
+
 function loadSort(): SortOrder {
 	try {
-		const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-		if (data && (data.key == "name" || data.key == "modified") && typeof data.desc == "boolean") {
-			return {key:data.key, desc:data.desc};
-		}
+		const data: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+		if (isSortOrder(data)) { return {key:data.key, desc:data.desc}; }
 	} catch (e) {}
 	return {key:"name", desc:false};
 }
@@ -39,9 +44,12 @@ export default class FileTools extends HTMLElement {
 	protected form: HTMLFormElement;
 	protected input: HTMLInputElement;
 	protected buttons: Record<SortKey, HTMLButtonElement>;
-	protected order = loadSort();
+	protected order: SortOrder = loadSort();
 	protected timeout?: number;
 	protected lastQuery = "";
+
+	onSearch: (query: string) => void = () => {};
+	onSort: (order: SortOrder) => void = () => {};
 
 	constructor() {
 		super();
@@ -70,23 +78,20 @@ export default class FileTools extends HTMLElement {
 			name: html.button({type:"button"}, "", sort),
 			modified: html.button({type:"button"}, "", sort)
 		};
-		(Object.keys(this.buttons) as SortKey[]).forEach(key => {
+		for (const key of SORT_KEYS) {
 			this.buttons[key].addEventListener("click", _ => this.toggleSort(key));
-		});
+		}
 		this.syncButtons();
 	}
 
 	get value() { return this.input.value.trim(); }
-	set value(value) {
+	set value(value: string) {
 		clearTimeout(this.timeout);
 		this.input.value = value;
 		this.lastQuery = this.value;
 	}
 
 	get sort(): SortOrder { return {...this.order}; }
-
-	onSearch(query: string) {}
-	onSort(order: SortOrder) {}
 
 	pending(pending: boolean) { this.classList.toggle("pending", pending); }
 
@@ -111,7 +116,7 @@ export default class FileTools extends HTMLElement {
 	}
 
 	protected syncButtons() {
-		(Object.keys(this.buttons) as SortKey[]).forEach(key => {
+		for (const key of SORT_KEYS) {
 			const button = this.buttons[key];
 			const active = (this.order.key == key);
 			html.clear(button);
@@ -126,7 +131,7 @@ export default class FileTools extends HTMLElement {
 			} else {
 				button.title = `Sort by ${describe({key, desc:(key == "modified")})}`;
 			}
-		});
+		}
 	}
 }
 

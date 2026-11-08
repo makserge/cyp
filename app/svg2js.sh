@@ -18,7 +18,7 @@ fi
 
 IMAGES=$(find "$1" -name "*.svg")
 
-printf "let ICONS={};\n"
+printf "const ICONS: Record<string, string> = {};\n"
 for i in $IMAGES; do
     process_svg $i
 done

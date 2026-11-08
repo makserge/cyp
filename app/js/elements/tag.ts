@@ -1,17 +1,17 @@
 import * as html from "../html.js";
 import * as art from "../art.js";
 import Item from "../item.js";
-import MPD from "../mpd.js";
+import type MPD from "../mpd.js";
+import type { TagFilter } from "../mpd.js";
 
 
-const ICONS = {
+export type TagType = "Album" | "AlbumArtist" | "Genre";
+
+const ICONS: Record<TagType, string> = {
 	"AlbumArtist": "artist",
 	"Album": "album",
 	"Genre": "music"
-}
-
-export type TagType = "Album" | "AlbumArtist" | "Genre";
-export type TagFilter = Record<string, string>;
+};
 
 
 export default class Tag extends Item {
@@ -26,19 +26,21 @@ export default class Tag extends Item {
 	}
 
 	async fillArt(mpd: MPD) {
-		const parent = this.firstChild as HTMLElement;
+		const parent = this.firstElementChild;
+		if (!(parent instanceof HTMLElement)) { return; }
 		const filter = this.createChildFilter();
 
-		let artist = filter["AlbumArtist"];
-		let album = filter["Album"];
-		let src = null;
+		const artist = filter["AlbumArtist"];
+		const album = filter["Album"];
+		let src: string | null = null;
 
 		if (artist && album) {
 			src = await art.get(mpd, artist, album);
 			if (!src) {
-				let songs = await mpd.listSongs(filter, [0,1]);
-				if (songs.length) {
-					src = await art.get(mpd, artist, album, songs[0]["file"]);
+				const songs = await mpd.listSongs(filter, [0,1]);
+				const first = songs[0];
+				if (first) {
+					src = await art.get(mpd, artist, album, first.file);
 				}
 			}
 		}
@@ -46,8 +48,7 @@ export default class Tag extends Item {
 		if (src) {
 			html.node("img", {src}, "", parent);
 		} else {
-			const icon = ICONS[this.type];
-			html.icon(icon, parent);
+			html.icon(ICONS[this.type], parent);
 		}
 	}
 }

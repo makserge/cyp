@@ -28,22 +28,68 @@ cyp-settings {
 			margin: 0 4px 0 0;
 		}
 	}
-	.system-actions {
+
+	// Refresh content, System shutdown, Save, Sync now: all one button style
+	.action-buttons {
+		.flex-row;
+		flex-wrap: wrap;
+		gap: var(--spacing);
 		margin: var(--spacing);
-		margin-top: 2em;
-		padding-top: var(--spacing);
-		border-top: 1px solid var(--bg-alt);
-		.flex-column;
-		align-items: flex-start;
+
 		button {
-			text-decoration: underline;
-			margin-top: 1em;
-			&:first-child {
-				margin-top: 0;
+			padding: 6px 14px;
+			border: 1px solid var(--fg);
+			border-radius: 4px;
+			text-decoration: none;
+			font-size: 16px;
+			&:disabled {
+				opacity: 0.35;
+				cursor: default;
 			}
 		}
 	}
-	#shutdown-btn {
-		color: #e05252;
+
+	// app sync (fetch from the device app): a line above it separates it from the system actions
+	.fetch-settings {
+		margin: var(--spacing);
+		padding-top: var(--spacing);
+		border-top: 1px solid var(--bg-alt);
+		.flex-column;
+		align-items: stretch;
+		font-size: 16px;
+		line-height: 20px;
+
+		h3 { margin: 0 0 var(--spacing); font-size: 18px; line-height: 24px; }
+		dl { margin: 0; }
+		dd { align-items: stretch; }
+		input[type=text], input[type=url], input[type=password], input[type=number] {
+			width: 100%;
+			box-sizing: border-box;
+			padding: 6px 8px;
+		}
+		.fetch-key-toggle { margin-top: var(--spacing); align-self: flex-start; }
+		.action-buttons { margin: var(--spacing) 0 0; }
+
+		.fetch-status { padding: 4px 0 0; margin: var(--spacing) 0 0; min-height: 1em; }
+
+		// status lines: one line per group of numbers, no scrollbar
+		.fetch-result {
+			margin-top: 4px;
+			padding: 6px 8px;
+			background: var(--bg-alt);
+			border-radius: 4px;
+			font-size: 14px;
+			line-height: 18px;
+			font-variant-numeric: tabular-nums;
+
+			&:empty { display: none; }
+
+			.fetch-line {
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.fetch-error { color: #e05252; }
+		}
 	}
 }

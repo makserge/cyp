@@ -1,17 +1,15 @@
 import * as html from "../html.js";
 import Component from "../component.js";
-import Tag, { TagType, TagFilter } from "./tag.js";
+import Tag, { type TagType } from "./tag.js";
 import Path from "./path.js";
 import Back from "./back.js";
 import Song from "./song.js";
 import Search from "./search.js";
 import Filter from "./filter.js";
-import FileTools, { SortOrder } from "./file-tools.js";
-import Selection from "../selection.js";
-import { escape, serializeFilter } from "../mpd.js";
-import { SongData, PathData } from "../parser.js";
+import FileTools, { type SortOrder } from "./file-tools.js";
+import { escape, serializeFilter, type TagFilter } from "../mpd.js";
+import type { PathData, SongData } from "../parser.js";
 import * as format from "../format.js";
-
 
 
 type OurNode = Song | Path | Tag;
@@ -32,7 +30,6 @@ type State = {
 	query?: string;
 }
 
-const SORT = "-Track";
 const MIN_PATH_QUERY = 2;
 const MAX_PATH_RESULTS = 500;
 const collator = new Intl.Collator(undefined, {numeric:true, sensitivity:"base"});
@@ -44,14 +41,18 @@ interface PathEntry {
 	modified: number; // ms since epoch, 0 when unknown
 	parent?: string; // shown for search results only
 }
-const TAGS = {
+
+const TAGS: Record<TagType, string> = {
 	"Album": "Albums",
 	"AlbumArtist": "Artists",
 	"Genre": "Genres"
+};
+
+function songsOf(items: HTMLElement[]): OurNode[] {
+	return items.filter((item): item is OurNode => item instanceof Song || item instanceof Path || item instanceof Tag);
 }
 
 class Library extends Component {
-	protected selection!: Selection;
 	protected search = new Search();
 	protected filter = new Filter();
 	protected fileTools = new FileTools();
@@ -64,33 +65,37 @@ class Library extends Component {
 		super();
 
 		this.search.onSubmit = () => {
-			let query = this.search.value;
+			const query = this.search.value;
 			if (query.length < 3) { return; }
 			this.doSearch(query);
-		}
+		};
 
 		this.fileTools.onSearch = query => this.searchPath(query);
 		this.fileTools.onSort = () => this.renderPathEntries();
+	}
+
+	// the state on top of the stack, the one shown; undefined when nothing was pushed
+	protected topState(depth = 0): State | undefined {
+		return this.stateStack[this.stateStack.length - 1 - depth];
 	}
 
 	protected popState() {
 		this.selection.clear();
 		this.stateStack.pop();
 
-		if (this.stateStack.length > 0) {
-			let state = this.stateStack[this.stateStack.length-1];
+		const state = this.topState();
+		if (state) {
 			this.showState(state);
 		} else {
 			this.showRoot();
 		}
 	}
 
-	protected onAppLoad() {
-		this.selection = this.app.createSelection();
+	protected override onAppLoad() {
 		this.showRoot();
 	}
 
-	protected onComponentChange(c: string, isThis: boolean) {
+	protected override onComponentChange(_c: string, isThis: boolean) {
 		const wasHidden = this.hidden;
 		this.hidden = !isThis;
 
@@ -132,17 +137,17 @@ class Library extends Component {
 		}
 	}
 
-	protected async listTags(tag: TagType, filter = {}) {
-		const values = (await this.mpd.listTags(tag, filter)).filter(nonempty) as any[];
+	protected async listTags(tag: TagType, filter: TagFilter = {}) {
+		const values = (await this.mpd.listTags(tag, filter)).filter(nonempty);
 		html.clear(this);
 
 		if ("AlbumArtist" in filter || "Genre" in filter) { this.buildBack(); }
-		(values.length > 0) && this.addFilter();
+		if (values.length > 0) { this.addFilter(); }
 
-		let nodes = values.map(value => this.buildTag(tag, value, filter));
+		const nodes = values.map(value => this.buildTag(tag, value, filter));
 		this.append(...nodes);
 
-		let albumNodes = nodes.filter(node => node.type == "Album");
+		const albumNodes = nodes.filter(node => node.type == "Album");
 		this.configureSelection(albumNodes);
 	}
 
@@ -152,7 +157,7 @@ class Library extends Component {
 		if (token != this.pathToken) { return; }
 
 		html.clear(this);
-		path && this.buildBack();
+		if (path) { this.buildBack(); }
 		this.append(this.fileTools);
 		this.fileTools.value = query;
 		this.fileTools.pending(false);
@@ -163,7 +168,7 @@ class Library extends Component {
 	}
 
 	protected async searchPath(query: string) {
-		const state = this.stateStack[this.stateStack.length-1];
+		const state = this.topState();
 		if (!state || state.type != "path") { return; }
 		state.query = query;
 
@@ -177,7 +182,7 @@ class Library extends Component {
 		this.renderPathEntries();
 	}
 
-	protected async loadPathEntries(path: string, query: string) {
+	protected async loadPathEntries(path: string, query: string): Promise<PathEntry[]> {
 		try {
 			if (!query) { return await this.readPath(path); }
 			if (query.length < MIN_PATH_QUERY) { return []; }
@@ -191,14 +196,14 @@ class Library extends Component {
 	/** Contents of one directory (lsinfo). */
 	protected async readPath(path: string) {
 		const paths = await this.mpd.listPath(path);
-		return [...paths["directory"], ...paths["file"]].map(data => createPathEntry(data));
+		return [...paths.directory, ...paths.file].map(data => createPathEntry(data));
 	}
 
 	/**
 	 * Search the MPD database below `base`: folders and files whose name contains the query,
 	 * plus songs whose Title tag contains it.
 	 */
-	protected async findInPath(base: string, query: string) {
+	protected async findInPath(base: string, query: string): Promise<PathEntry[]> {
 		const [byFile, byTitle] = await Promise.all([
 			this.mpd.searchTag("file", query, base),
 			this.mpd.searchTag("Title", query, base)
@@ -213,7 +218,7 @@ class Library extends Component {
 			if (!song.file.startsWith(prefix)) { return; }
 			const modified = parseDate(song["Last-Modified"]);
 			const segments = song.file.substring(prefix.length).split("/");
-			const name = segments.pop()!;
+			const name = segments.pop() ?? "";
 
 			let dir = base;
 			segments.forEach(segment => {
@@ -241,7 +246,7 @@ class Library extends Component {
 	}
 
 	protected renderPathEntries() {
-		const state = this.stateStack[this.stateStack.length-1];
+		const state = this.topState();
 		if (!state || state.type != "path") { return; }
 
 		this.selection.clear();
@@ -254,12 +259,12 @@ class Library extends Component {
 
 		const nodes = shown.map(entry => {
 			const tokens: string[] = [];
-			(entry.parent !== undefined) && tokens.push(entry.parent || "/");
-			(order.key == "modified" && entry.modified) && tokens.push(formatDate(entry.modified));
+			if (entry.parent !== undefined) { tokens.push(entry.parent || "/"); }
+			if (order.key == "modified" && entry.modified) { tokens.push(formatDate(entry.modified)); }
 
 			const node = new Path(entry.data, tokens.join(format.SEPARATOR));
 			if (entry.isDirectory) {
-				const path = entry.data.directory!;
+				const path = entry.data.directory ?? "";
 				node.addButton("chevron-double-right", () => this.pushState({type:"path", path}));
 			}
 			return node;
@@ -285,9 +290,9 @@ class Library extends Component {
 		const songs = await this.mpd.listSongs(filter);
 		html.clear(this);
 		this.buildBack();
-		(songs.length > 0 && this.addFilter());
+		if (songs.length > 0) { this.addFilter(); }
 
-		let nodes = songs.map(song => new Song(song));
+		const nodes = songs.map(song => new Song(song));
 		this.append(...nodes);
 
 		this.configureSelection(nodes);
@@ -300,14 +305,12 @@ class Library extends Component {
 		this.search.value = query;
 		this.search.focus();
 
-		query && this.search.onSubmit();
+		if (query) { this.search.onSubmit(); }
 	}
 
 	protected async doSearch(query: string) {
-		this.stateStack[this.stateStack.length-1] = {
-			type: "search",
-			query
-		}
+		const index = this.stateStack.length - 1;
+		if (index >= 0) { this.stateStack[index] = { type: "search", query }; }
 
 		html.clear(this);
 		this.append(this.search);
@@ -319,35 +322,37 @@ class Library extends Component {
 
 		this.search.pending(false);
 
-		let nodes1 = this.aggregateSearch(songs1, "AlbumArtist");
-		let nodes2 = this.aggregateSearch(songs2, "Album");
-		let nodes3 = songs3.map(song => new Song(song));
+		const nodes1 = this.aggregateSearch(songs1, "AlbumArtist");
+		const nodes2 = this.aggregateSearch(songs2, "Album");
+		const nodes3 = songs3.map(song => new Song(song));
 		this.append(...nodes1, ...nodes2, ...nodes3);
 
-		let selectableNodes = [...nodes2, ...nodes3];
+		const selectableNodes = [...nodes2, ...nodes3];
 		this.configureSelection(selectableNodes);
 	}
 
-	protected aggregateSearch(songs: SongData[], tag: TagType) {
-		let results = new Map();
-		let nodes: OurNode[] = [];
+	protected aggregateSearch(songs: SongData[], tag: TagType): Tag[] {
+		const results = new Map<string, TagFilter>();
 
 		songs.forEach(song => {
-			let filter: TagFilter = {}, value;
+			const filter: TagFilter = {};
 			const artist = song.AlbumArtist || song.Artist;
+			let value: string | undefined;
 
 			if (tag == "Album") {
-				value = song[tag];
+				value = song.Album;
 				if (artist) { filter["AlbumArtist"] = artist; }
 			}
 
 			if (tag == "AlbumArtist") { value = artist; }
 
-			results.set(value, filter);
+			// a song without the tag has nothing to group under
+			if (value !== undefined) { results.set(value, filter); }
 		});
 
+		const nodes: Tag[] = [];
 		results.forEach((filter, value) => {
-			let node = this.buildTag(tag, value, filter);
+			const node = this.buildTag(tag, value, filter);
 			nodes.push(node);
 		});
 
@@ -355,7 +360,7 @@ class Library extends Component {
 	}
 
 	protected buildTag(tag: TagType, value: string, filter: TagFilter) {
-		let node = new Tag(tag, value, filter);
+		const node = new Tag(tag, value, filter);
 		node.fillArt(this.mpd);
 
 		switch (tag) {
@@ -373,7 +378,9 @@ class Library extends Component {
 	}
 
 	protected buildBack() {
-		const backState = this.stateStack[this.stateStack.length-2];
+		const backState = this.topState(1);
+		if (!backState) { return; }
+
 		let title = "";
 		switch (backState.type) {
 			case "path": title = (backState.query ? `Search: ${backState.query}` : ".."); break;
@@ -394,17 +401,17 @@ class Library extends Component {
 	configureSelection(items: OurNode[]) {
 		const { selection, mpd } = this;
 
-		let commands = [{
-			cb: async (items: OurNode[]) => {
-				const commands = ["clear", ...items.map(createEnqueueCommand), "play"];
+		const commands = [{
+			cb: async (items: HTMLElement[]) => {
+				const commands = ["clear", ...songsOf(items).map(createEnqueueCommand), "play"];
 				await mpd.command(commands);
 				selection.clear(); // fixme notification?
 			},
 			label:"Play",
 			icon:"play"
 		}, {
-			cb: async (items: OurNode[]) => {
-				const commands = items.map(createEnqueueCommand);
+			cb: async (items: HTMLElement[]) => {
+				const commands = songsOf(items).map(createEnqueueCommand);
 				await mpd.command(commands);
 				selection.clear(); // fixme notification?
 			},
@@ -462,23 +469,21 @@ function sortPathEntries(entries: PathEntry[], order: SortOrder) {
 	return entries.slice().sort((a, b) => {
 		if (a.isDirectory != b.isDirectory) { return (a.isDirectory ? -1 : 1); }
 
-		let diff = (order.key == "modified" ? a.modified - b.modified : collator.compare(a.name, b.name));
+		const diff = (order.key == "modified" ? a.modified - b.modified : collator.compare(a.name, b.name));
 		if (diff) { return diff * sign; }
 
 		return collator.compare(a.name, b.name) || collator.compare(uri(a), uri(b));
 	});
 }
 
-function createEnqueueCommand(node: OurNode | HTMLElement) {
+function createEnqueueCommand(node: OurNode) {
 	if (node instanceof Song || node instanceof Path) {
 		return `add "${escape(node.file)}"`;
-	} else if (node instanceof Tag) {
+	} else {
 		return [
 			"findadd",
 			serializeFilter(node.createChildFilter()),
 			// `sort ${SORT}` // MPD >= 0.22, not yet released
 		].join(" ");
-	} else {
-		throw new Error(`Cannot create enqueue command for "${node.nodeName}"`);
 	}
 }

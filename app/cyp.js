@@ -16,6 +16,18 @@
       }
     return a;
   };
+  var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+      if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+        target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(source)) {
+        if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+          target[prop] = source[prop];
+      }
+    return target;
+  };
 
   // node_modules/custom-range/range.js
   var Range = class extends HTMLElement {
@@ -204,179 +216,204 @@
   };
   customElements.define("x-range", Range);
 
+  // app/js/range.ts
+  function isXRange(element) {
+    return "valueAsNumber" in element;
+  }
+
   // app/js/parser.ts
   function linesToStruct(lines) {
-    let result = {};
-    lines.forEach((line) => {
-      let cindex = line.indexOf(":");
+    const result = {};
+    for (const line of lines) {
+      const cindex = line.indexOf(":");
       if (cindex == -1) {
         throw new Error(`Malformed line "${line}"`);
       }
-      let key = line.substring(0, cindex);
-      let value = line.substring(cindex + 2);
-      if (key in result) {
-        let old = result[key];
-        if (old instanceof Array) {
-          old.push(value);
-        } else {
-          result[key] = [old, value];
-        }
-      } else {
+      const key = line.substring(0, cindex);
+      const value = line.substring(cindex + 2);
+      const old = result[key];
+      if (old === void 0) {
         result[key] = value;
+      } else if (Array.isArray(old)) {
+        old.push(value);
+      } else {
+        result[key] = [old, value];
       }
-    });
+    }
     return result;
   }
   function songList(lines) {
-    let songs = [];
+    const songs = [];
     let batch = [];
-    while (lines.length) {
-      let line = lines[0];
+    for (const line of lines) {
       if (line.startsWith("file:") && batch.length) {
-        let song = linesToStruct(batch);
-        songs.push(song);
+        songs.push(linesToStruct(batch));
         batch = [];
       }
-      batch.push(lines.shift());
+      batch.push(line);
     }
     if (batch.length) {
-      let song = linesToStruct(batch);
-      songs.push(song);
+      songs.push(linesToStruct(batch));
     }
     return songs;
   }
+  function pathKind(prefix2) {
+    switch (prefix2) {
+      case "file":
+        return "file";
+      case "directory":
+        return "directory";
+      case "playlist":
+        return "playlist";
+      default:
+        return null;
+    }
+  }
   function pathContents(lines) {
-    const prefixes = ["file", "directory", "playlist"];
+    var _a;
+    const result = { file: [], directory: [], playlist: [] };
     let batch = [];
-    let result = {};
-    let batchPrefix = "";
-    prefixes.forEach((prefix2) => result[prefix2] = []);
-    while (lines.length) {
-      let line = lines[0];
-      let prefix2 = line.split(":")[0];
-      if (prefixes.includes(prefix2)) {
-        if (batch.length) {
-          result[batchPrefix].push(linesToStruct(batch));
-        }
-        batchPrefix = prefix2;
+    let batchKind = null;
+    const flush = () => {
+      if (batch.length && batchKind) {
+        result[batchKind].push(linesToStruct(batch));
+      }
+    };
+    for (const line of lines) {
+      const kind = pathKind((_a = line.split(":")[0]) != null ? _a : "");
+      if (kind) {
+        flush();
+        batchKind = kind;
         batch = [];
       }
-      batch.push(lines.shift());
+      batch.push(line);
     }
-    if (batch.length) {
-      result[batchPrefix].push(linesToStruct(batch));
-    }
+    flush();
     return result;
   }
 
   // app/js/mpd.ts
+  function isTicket(data) {
+    return typeof data == "object" && data !== null && "ticket" in data && typeof data.ticket == "string";
+  }
+  function isReply(data) {
+    return Array.isArray(data) && data.every((item) => typeof item == "string" || Array.isArray(item));
+  }
+  function toArray(value) {
+    if (value === void 0) {
+      return [];
+    }
+    return Array.isArray(value) ? value : [value];
+  }
+  function textLines(lines) {
+    return lines.map((line) => {
+      if (typeof line != "string") {
+        throw new Error("unexpected binary data in reply");
+      }
+      return line;
+    });
+  }
   var MPD = class {
     constructor(ws, initialCommand) {
       this.ws = ws;
       this.queue = [];
       this.canTerminateIdle = false;
+      // set by the app: called when the connection closes, and with the names of subsystems that changed
+      this.onClose = () => {
+      };
+      this.onChange = () => {
+      };
       this.current = initialCommand;
       ws.addEventListener("message", (e) => this._onMessage(e));
       ws.addEventListener("close", (e) => this._onClose(e));
     }
     static async connect() {
-      let response = await fetch("ticket", { method: "POST" });
-      let ticket = (await response.json()).ticket;
-      let ws = new WebSocket(createURL(ticket).href);
+      const response = await fetch("ticket", { method: "POST" });
+      const data = await response.json();
+      if (!isTicket(data)) {
+        throw new Error("no ticket from the server");
+      }
+      const ws = new WebSocket(createURL(data.ticket).href);
       return new Promise((resolve, reject) => {
-        let mpd;
-        let initialCommand = { resolve: () => resolve(mpd), reject, cmd: "" };
-        mpd = new this(ws, initialCommand);
+        const mpd = new this(ws, { cmd: "", resolve: () => resolve(mpd), reject });
       });
-    }
-    onClose(e) {
-    }
-    onChange(changed) {
     }
     command(cmds) {
-      let cmd = cmds instanceof Array ? ["command_list_begin", ...cmds, "command_list_end"].join("\n") : cmds;
-      return new Promise((resolve, reject) => {
-        this.queue.push({ cmd, resolve, reject });
-        if (!this.current) {
-          this.advanceQueue();
-        } else if (this.canTerminateIdle) {
-          this.ws.send("noidle");
-          this.canTerminateIdle = false;
-        }
-      });
+      return this.send(cmds).then(textLines);
     }
-    async status() {
-      let lines = await this.command("status");
-      return linesToStruct(lines);
+    status() {
+      return this.command("status").then((lines) => linesToStruct(lines));
     }
     async currentSong() {
-      let lines = await this.command("currentsong");
+      const lines = await this.command("currentsong");
       return linesToStruct(lines);
     }
     async listQueue() {
-      let lines = await this.command("playlistinfo");
+      const lines = await this.command("playlistinfo");
       return songList(lines);
     }
     async listPlaylists() {
-      let lines = await this.command("listplaylists");
-      let parsed = linesToStruct(lines);
-      let list = parsed.playlist;
-      if (!list) {
-        return [];
-      }
-      return list instanceof Array ? list : [list];
+      const lines = await this.command("listplaylists");
+      return toArray(linesToStruct(lines).playlist);
     }
     async listPlaylistItems(name) {
-      let lines = await this.command(`listplaylistinfo "${escape(name)}"`);
+      const lines = await this.command(`listplaylistinfo "${escape(name)}"`);
       return songList(lines);
     }
     async listPath(path) {
-      let lines = await this.command(`lsinfo "${escape(path)}"`);
+      const lines = await this.command(`lsinfo "${escape(path)}"`);
       return pathContents(lines);
     }
     async listTags(tag, filter = {}) {
-      let tokens = ["list", tag];
-      if (Object.keys(filter).length) {
+      const tokens = ["list", tag];
+      const fakeGroup = Object.keys(filter)[0];
+      if (fakeGroup !== void 0) {
         tokens.push(serializeFilter(filter));
-        let fakeGroup = Object.keys(filter)[0];
         tokens.push("group", fakeGroup);
       }
-      let lines = await this.command(tokens.join(" "));
-      let parsed = linesToStruct(lines);
-      return [].concat(tag in parsed ? parsed[tag] : []);
+      const lines = await this.command(tokens.join(" "));
+      const parsed = linesToStruct(lines);
+      return toArray(parsed[tag]);
     }
     async listSongs(filter, window2) {
-      let tokens = ["find", serializeFilter(filter)];
-      window2 && tokens.push("window", window2.join(":"));
-      let lines = await this.command(tokens.join(" "));
+      const tokens = ["find", serializeFilter(filter)];
+      if (window2) {
+        tokens.push("window", window2.join(":"));
+      }
+      const lines = await this.command(tokens.join(" "));
       return songList(lines);
     }
     async searchSongs(filter) {
-      let tokens = ["search", serializeFilter(filter, "contains")];
-      let lines = await this.command(tokens.join(" "));
+      const tokens = ["search", serializeFilter(filter, "contains")];
+      const lines = await this.command(tokens.join(" "));
       return songList(lines);
     }
     /**
      * Case-insensitive substring search of a single tag (or "file" for the song URI),
      * optionally restricted to songs below the `base` directory.
      */
-    async searchTag(tag, query, base = "") {
-      let parts = [`(${tag} contains "${escape(query)}")`];
-      base && parts.push(`(base "${escape(base)}")`);
-      let filterStr = `(${parts.join(" AND ")})`;
-      let lines = await this.command(`search "${escape(filterStr)}"`);
+    async searchTag(tag, query2, base = "") {
+      const parts = [`(${tag} contains "${escape(query2)}")`];
+      if (base) {
+        parts.push(`(base "${escape(base)}")`);
+      }
+      const filterStr = `(${parts.join(" AND ")})`;
+      const lines = await this.command(`search "${escape(filterStr)}"`);
       return songList(lines);
     }
     async albumArt(songUrl) {
       let data = [];
       let offset = 0;
-      let params = ["albumart", `"${escape(songUrl)}"`, offset];
-      while (1) {
-        params[2] = offset;
+      for (; ; ) {
+        const params = ["albumart", `"${escape(songUrl)}"`, String(offset)];
         try {
-          let lines = await this.command(params.join(" "));
-          data = data.concat(lines[2]);
-          let metadata = linesToStruct(lines.slice(0, 2));
+          const lines = await this.send(params.join(" "), true);
+          const bytes = lines[2];
+          if (!Array.isArray(bytes)) {
+            return null;
+          }
+          data = data.concat(bytes);
+          const metadata = linesToStruct(textLines(lines.slice(0, 2)));
           if (data.length >= Number(metadata.size)) {
             return data;
           }
@@ -385,21 +422,27 @@
           return null;
         }
       }
-      return null;
     }
     _onMessage(e) {
       if (!this.current) {
         return;
       }
-      let lines = JSON.parse(e.data);
-      let last = lines.pop();
-      if (last.startsWith("OK")) {
-        this.current.resolve(lines);
-      } else {
-        console.warn(last);
-        this.current.reject(last);
-      }
+      const { current } = this;
       this.current = void 0;
+      const lines = JSON.parse(e.data);
+      if (!isReply(lines) || lines.length == 0) {
+        current.reject("malformed reply from the server");
+      } else {
+        const last = lines[lines.length - 1];
+        if (typeof last == "string" && last.startsWith("OK")) {
+          current.resolve(lines.slice(0, -1));
+        } else {
+          if (!current.quiet) {
+            console.warn(last);
+          }
+          current.reject(String(last));
+        }
+      }
       if (this.queue.length > 0) {
         this.advanceQueue();
       } else {
@@ -407,41 +450,62 @@
       }
     }
     _onClose(e) {
+      var _a;
       console.warn(e);
-      this.current && this.current.reject(e);
+      (_a = this.current) == null ? void 0 : _a.reject(e);
       this.onClose(e);
     }
+    // Sends one command (or a command list) and resolves with the raw reply
+    send(cmds, quiet = false) {
+      const cmd = Array.isArray(cmds) ? ["command_list_begin", ...cmds, "command_list_end"].join("\n") : cmds;
+      return new Promise((resolve, reject) => {
+        this.queue.push({ cmd, resolve, reject, quiet });
+        if (!this.current) {
+          this.advanceQueue();
+        } else if (this.canTerminateIdle) {
+          this.ws.send("noidle");
+          this.canTerminateIdle = false;
+        }
+      });
+    }
     advanceQueue() {
-      this.current = this.queue.shift();
-      this.ws.send(this.current.cmd);
+      const next = this.queue.shift();
+      if (!next) {
+        return;
+      }
+      this.current = next;
+      this.ws.send(next.cmd);
     }
     async idle() {
       if (this.current) {
         return;
       }
       this.canTerminateIdle = true;
-      let lines = await this.command("idle stored_playlist playlist player options mixer");
+      const lines = await this.command("idle stored_playlist playlist player options mixer");
       this.canTerminateIdle = false;
-      let changed = linesToStruct(lines).changed || [];
-      changed = [].concat(changed);
-      changed.length > 0 && this.onChange(changed);
+      const changed = toArray(linesToStruct(lines).changed);
+      if (changed.length > 0) {
+        this.onChange(changed);
+      }
     }
   };
   function escape(str) {
     return str.replace(/(['"\\])/g, "\\$1");
   }
   function serializeFilter(filter, operator = "==") {
-    let tokens = ["("];
+    const tokens = ["("];
     Object.entries(filter).forEach(([key, value], index) => {
-      index && tokens.push(" AND ");
+      if (index) {
+        tokens.push(" AND ");
+      }
       tokens.push(`(${key} ${operator} "${escape(value)}")`);
     });
     tokens.push(")");
-    let filterStr = tokens.join("");
+    const filterStr = tokens.join("");
     return `"${escape(filterStr)}"`;
   }
   function createURL(ticket) {
-    let url = new URL(location.href);
+    const url = new URL(location.href);
     url.protocol = url.protocol == "https:" ? "wss" : "ws";
     url.hash = "";
     url.searchParams.set("ticket", ticket);
@@ -540,51 +604,67 @@
   var icons_default = ICONS;
 
   // app/js/html.ts
-  function node(name, attrs, content, parent) {
-    let n = document.createElement(name);
-    Object.assign(n, attrs);
-    if (attrs && attrs.title) {
-      n.setAttribute("aria-label", attrs.title);
+  function byId(id, type) {
+    const element = document.getElementById(id);
+    if (!(element instanceof type)) {
+      throw new Error(`missing element #${id}`);
     }
-    content && text(content, n);
-    parent && parent.append(n);
-    return n;
+    return element;
+  }
+  function query(root, selector, type) {
+    const found = root.querySelector(selector);
+    if (!(found instanceof type)) {
+      throw new Error(`missing element "${selector}"`);
+    }
+    return found;
+  }
+  function node(name, props = {}, content = "", parent) {
+    const element = document.createElement(name);
+    Object.assign(element, props);
+    if (element.title) {
+      element.setAttribute("aria-label", element.title);
+    }
+    if (content) {
+      element.append(content);
+    }
+    parent == null ? void 0 : parent.append(element);
+    return element;
   }
   function icon(type, parent) {
-    let str = icons_default[type];
-    if (!str) {
+    const source = icons_default[type];
+    if (!source) {
       console.error("Bad icon type '%s'", type);
       return node("span", {}, "\u203D");
     }
-    let tmp = node("div");
-    tmp.innerHTML = str;
-    let s = tmp.querySelector("svg");
-    if (!s) {
+    const holder = node("div");
+    holder.innerHTML = source;
+    const svg = holder.querySelector("svg");
+    if (!svg) {
       throw new Error(`Bad icon source for type '${type}'`);
     }
-    s.classList.add("icon");
-    s.classList.add(`icon-${type}`);
-    parent && parent.append(s);
-    return s;
+    svg.classList.add("icon");
+    svg.classList.add(`icon-${type}`);
+    parent == null ? void 0 : parent.append(svg);
+    return svg;
   }
-  function button(attrs, content, parent) {
-    let result = node("button", attrs, content, parent);
-    if (attrs && attrs.icon) {
-      let i = icon(attrs.icon);
-      result.insertBefore(i, result.firstChild);
+  function button(props = {}, content = "", parent) {
+    const _a = props, { icon: iconType } = _a, rest = __objRest(_a, ["icon"]);
+    const result = node("button", rest, content, parent);
+    if (iconType) {
+      result.insertBefore(icon(iconType), result.firstChild);
     }
     return result;
   }
-  function clear(node2) {
-    while (node2.firstChild) {
-      node2.firstChild.remove();
+  function clear(target) {
+    while (target.firstChild) {
+      target.firstChild.remove();
     }
-    return node2;
+    return target;
   }
   function text(txt, parent) {
-    let n = document.createTextNode(txt);
-    parent && parent.append(n);
-    return n;
+    const textNode = document.createTextNode(txt);
+    parent == null ? void 0 : parent.append(textNode);
+    return textNode;
   }
 
   // app/js/selection.ts
@@ -592,11 +672,12 @@
     constructor() {
       this.commands = new Commands();
       this.items = [];
+      this.mode = "multi";
       this.hide();
     }
     configure(items, mode, commands) {
       this.mode = mode;
-      let allCommands = [];
+      const allCommands = [];
       if (mode == "multi") {
         allCommands.push({
           cb: () => items.forEach((item) => this.add(item)),
@@ -611,13 +692,12 @@
         label: "Cancel",
         className: "last"
       });
-      let buttons = allCommands.map((command) => {
-        let button2 = buildButton(command);
-        button2.addEventListener("click", (_) => {
-          const arg = mode == "single" ? this.items[0] : this.items;
-          command.cb(arg);
+      const buttons = allCommands.map((command) => {
+        const button3 = buildButton(command);
+        button3.addEventListener("click", (_) => {
+          command.cb([...this.items]);
         });
-        return button2;
+        return button3;
       });
       this.commands.innerHTML = "";
       this.commands.append(...buttons);
@@ -627,8 +707,8 @@
       this.clear();
     }
     clear() {
-      while (this.items.length) {
-        this.remove(this.items[0]);
+      for (const item of [...this.items]) {
+        this.remove(item);
       }
     }
     toggle(node2) {
@@ -645,8 +725,9 @@
       const length = this.items.length;
       this.items.push(node2);
       node2.classList.add("selected");
-      if (this.mode == "single" && length > 0) {
-        this.remove(this.items[0]);
+      const first = this.items[0];
+      if (this.mode == "single" && length > 0 && first) {
+        this.remove(first);
       }
       if (length == 0) {
         this.show();
@@ -654,6 +735,9 @@
     }
     remove(node2) {
       const index = this.items.indexOf(node2);
+      if (index < 0) {
+        return;
+      }
       this.items.splice(index, 1);
       node2.classList.remove("selected");
       if (this.items.length == 0) {
@@ -668,12 +752,12 @@
     }
   };
   function buildButton(command) {
-    const button2 = button({ icon: command.icon });
+    const button3 = button({ icon: command.icon });
     if (command.className) {
-      button2.className = command.className;
+      button3.className = command.className;
     }
-    node("span", {}, command.label, button2);
-    return button2;
+    node("span", {}, command.label, button3);
+    return button3;
   }
   var Commands = class extends HTMLElement {
   };
@@ -683,6 +767,10 @@
   var artSize = 96 * (window.devicePixelRatio || 1);
   var ytPath = "_youtube";
   var ytLimit = 3;
+  var shuttingDown = false;
+  function beginShutdown() {
+    shuttingDown = true;
+  }
   function setYtLimit(limit) {
     ytLimit = limit;
   }
@@ -691,37 +779,49 @@
   }
 
   // app/js/elements/app.ts
+  function isShuttingDown() {
+    return shuttingDown;
+  }
   function initIcons() {
-    [...document.querySelectorAll("[data-icon]")].forEach((node2) => {
-      node2.dataset.icon.split(" ").forEach((name) => {
-        let icon2 = icon(name);
-        node2.prepend(icon2);
+    document.querySelectorAll("[data-icon]").forEach((node2) => {
+      var _a;
+      ((_a = node2.dataset["icon"]) != null ? _a : "").split(" ").forEach((name) => {
+        node2.prepend(icon(name));
       });
     });
   }
+  function isYoutubeSettings(data) {
+    return typeof data == "object" && data !== null && "youtubeDir" in data && typeof data.youtubeDir == "string";
+  }
   var App = class extends HTMLElement {
+    static get observedAttributes() {
+      return ["component"];
+    }
     constructor() {
       super();
       initIcons();
     }
-    static get observedAttributes() {
-      return ["component"];
+    // Available once the app has connected (components use it after the "load" event)
+    get mpd() {
+      if (!this._mpd) {
+        throw new Error("not connected to MPD yet");
+      }
+      return this._mpd;
     }
     async connectedCallback() {
       await waitForChildren(this);
-      window.addEventListener("hashchange", (e) => this.onHashChange());
+      window.addEventListener("hashchange", (_) => this.onHashChange());
       this.onHashChange();
       await loadSettings();
       await this.connect();
       this.dispatchEvent(new CustomEvent("load"));
       this.initMediaHandler();
     }
-    attributeChangedCallback(name, oldValue, newValue) {
+    attributeChangedCallback(name, _oldValue, newValue) {
       switch (name) {
         case "component":
-          location.hash = newValue;
-          const e = new CustomEvent("component-change");
-          this.dispatchEvent(e);
+          location.hash = newValue != null ? newValue : "";
+          this.dispatchEvent(new CustomEvent("component-change"));
           break;
       }
     }
@@ -732,8 +832,8 @@
       this.setAttribute("component", component);
     }
     createSelection() {
-      let selection = new Selection();
-      this.querySelector("footer").append(selection.commands);
+      const selection = new Selection();
+      query(this, "footer", HTMLElement).append(selection.commands);
       return selection;
     }
     onHashChange() {
@@ -745,7 +845,10 @@
     onChange(changed) {
       this.dispatchEvent(new CustomEvent("idle-change", { detail: changed }));
     }
-    async onClose(e) {
+    async onClose(_e) {
+      if (isShuttingDown()) {
+        return;
+      }
       await sleep(3e3);
       this.connect();
     }
@@ -753,14 +856,17 @@
       const attempts = 3;
       for (let i = 0; i < attempts; i++) {
         try {
-          let mpd = await MPD.connect();
+          const mpd = await MPD.connect();
           mpd.onChange = (changed) => this.onChange(changed);
           mpd.onClose = (e) => this.onClose(e);
-          this.mpd = mpd;
+          this._mpd = mpd;
           return;
         } catch (e) {
           await sleep(500);
         }
+      }
+      if (isShuttingDown()) {
+        return;
       }
       alert(`Failed to connect to MPD after ${attempts} attempts. Please reload the page to try again.`);
     }
@@ -809,7 +915,7 @@
   async function loadSettings() {
     const response = await fetch("settings");
     const settings = await response.json();
-    if (settings.youtubeDir) {
+    if (isYoutubeSettings(settings)) {
       setYtPath(settings.youtubeDir);
     }
   }
@@ -826,14 +932,23 @@
       });
     }
     get app() {
-      return this.closest("cyp-app");
+      const app = this.closest("cyp-app");
+      if (!(app instanceof App)) {
+        throw new Error(`${this.nodeName} is not inside cyp-app`);
+      }
+      return app;
     }
     get mpd() {
       return this.app.mpd;
     }
+    // The selection bar of the footer, created on first use
+    get selection() {
+      var _a;
+      return (_a = this._selection) != null ? _a : this._selection = this.app.createSelection();
+    }
     onAppLoad() {
     }
-    onComponentChange(component, isThis) {
+    onComponentChange(_component, _isThis) {
     }
   };
 
@@ -841,29 +956,32 @@
   var Menu = class extends Component {
     constructor() {
       super(...arguments);
-      this.tabs = Array.from(this.querySelectorAll("[data-for]"));
+      this.tabs = [...this.querySelectorAll("[data-for]")];
     }
     connectedCallback() {
       super.connectedCallback();
       this.tabs.forEach((tab) => {
-        tab.addEventListener("click", (_) => this.app.setAttribute("component", tab.dataset.for));
+        tab.addEventListener("click", (_) => {
+          var _a;
+          return this.app.setAttribute("component", (_a = tab.dataset["for"]) != null ? _a : "");
+        });
       });
     }
     onAppLoad() {
       this.app.addEventListener("queue-length-change", (e) => {
-        this.querySelector(".queue-length").textContent = `(${e.detail})`;
+        query(this, ".queue-length", HTMLElement).textContent = `(${e.detail})`;
       });
     }
     onComponentChange(component) {
       this.tabs.forEach((tab) => {
-        tab.classList.toggle("active", tab.dataset.for == component);
+        tab.classList.toggle("active", tab.dataset["for"] == component);
       });
     }
   };
   customElements.define("cyp-menu", Menu);
 
   // app/js/art.ts
-  var cache = {};
+  var cache = /* @__PURE__ */ new Map();
   var MIME = "image/jpeg";
   var STORAGE_PREFIX = `art-${artSize}`;
   function store(key, data) {
@@ -872,72 +990,83 @@
   function load(key) {
     return localStorage.getItem(`${STORAGE_PREFIX}-${key}`);
   }
-  async function bytesToImage(bytes) {
-    const blob = new Blob([bytes]);
+  function bytesToImage(bytes) {
+    const blob = new Blob([bytes], { type: MIME });
     const src = URL.createObjectURL(blob);
     const image = node("img", { src });
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("cover is not a valid image"));
     });
   }
   function resize(image) {
+    var _a, _b;
     while (Math.min(image.width, image.height) >= 2 * artSize) {
-      let tmp = node("canvas", { width: image.width / 2, height: image.height / 2 });
-      tmp.getContext("2d").drawImage(image, 0, 0, tmp.width, tmp.height);
+      const tmp = node("canvas", { width: image.width / 2, height: image.height / 2 });
+      (_a = tmp.getContext("2d")) == null ? void 0 : _a.drawImage(image, 0, 0, tmp.width, tmp.height);
       image = tmp;
     }
     const canvas = node("canvas", { width: artSize, height: artSize });
-    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    (_b = canvas.getContext("2d")) == null ? void 0 : _b.drawImage(image, 0, 0, canvas.width, canvas.height);
     return canvas;
   }
-  async function get(mpd, artist, album, songUrl) {
+  async function fetchCover(mpd, songUrl) {
+    const data = await mpd.albumArt(songUrl);
+    if (!data) {
+      return null;
+    }
+    const image = await bytesToImage(new Uint8Array(data));
+    return resize(image).toDataURL(MIME);
+  }
+  function get(mpd, artist, album, songUrl) {
     const key = `${artist}-${album}`;
-    if (key in cache) {
-      return cache[key];
+    const cached = cache.get(key);
+    if (cached) {
+      return cached;
     }
     const loaded = load(key);
     if (loaded) {
-      cache[key] = loaded;
-      return loaded;
+      const promise2 = Promise.resolve(loaded);
+      cache.set(key, promise2);
+      return promise2;
     }
     if (!songUrl) {
-      return null;
+      return Promise.resolve(null);
     }
-    let resolve;
-    const promise = new Promise((res) => resolve = res);
-    cache[key] = promise;
-    const data = await mpd.albumArt(songUrl);
-    if (data) {
-      const bytes = new Uint8Array(data);
-      const image = await bytesToImage(bytes);
-      const url = resize(image).toDataURL(MIME);
-      store(key, url);
-      cache[key] = url;
-      resolve(url);
-    } else {
-      cache[key] = null;
-    }
-    return cache[key];
+    const promise = fetchCover(mpd, songUrl).then((url) => {
+      if (url) {
+        store(key, url);
+      }
+      return url;
+    }).catch(() => null);
+    cache.set(key, promise);
+    return promise;
   }
 
   // app/js/format.ts
   var SEPARATOR = " \xB7 ";
   function time(sec) {
     sec = Math.round(sec);
-    let m = Math.floor(sec / 60);
-    let s = sec % 60;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
     return `${m}:${s.toString().padStart(2, "0")}`;
   }
   function subtitle(data, options = { duration: true }) {
-    let tokens = [];
-    data.Name && tokens.push(data.Name);
+    const tokens = [];
+    if (data.Name) {
+      tokens.push(data.Name);
+    }
     if (data.Artist) {
       tokens.push(data.Artist);
     } else if (data.AlbumArtist) {
       tokens.push(data.AlbumArtist);
     }
-    data.Album && tokens.push(data.Album);
-    options.duration && data.duration && tokens.push(time(Number(data.duration)));
+    if (data.Album) {
+      tokens.push(data.Album);
+    }
+    if (options.duration && data.duration) {
+      tokens.push(time(Number(data.duration)));
+    }
     return tokens.join(SEPARATOR);
   }
   function fileName(file) {
@@ -946,6 +1075,31 @@
 
   // app/js/elements/player.ts
   var ELAPSED_PERIOD = 500;
+  function slider(root, selector) {
+    const element = query(root, selector, HTMLElement);
+    if (!isXRange(element)) {
+      throw new Error(`"${selector}" is not a slider`);
+    }
+    return element;
+  }
+  function lookUpDOM(root) {
+    return {
+      art: query(root, ".art", HTMLElement),
+      title: query(root, ".info .title", HTMLElement),
+      subtitle: query(root, ".info .subtitle", HTMLElement),
+      elapsed: query(root, ".elapsed", HTMLElement),
+      duration: query(root, ".duration", HTMLElement),
+      progress: slider(root, ".timeline x-range"),
+      volume: slider(root, ".controls .volume x-range"),
+      mute: query(root, ".mute", HTMLButtonElement),
+      play: query(root, ".play", HTMLButtonElement),
+      pause: query(root, ".pause", HTMLButtonElement),
+      prev: query(root, ".prev", HTMLButtonElement),
+      next: query(root, ".next", HTMLButtonElement),
+      random: query(root, ".random", HTMLButtonElement),
+      repeat: query(root, ".repeat", HTMLButtonElement)
+    };
+  }
   var Player = class extends Component {
     constructor() {
       super();
@@ -956,30 +1110,25 @@
         volume: 0
       };
       this.toggleVolume = 0;
-      const DOM = {};
-      const all = this.querySelectorAll("[class]");
-      [...all].forEach((node2) => DOM[node2.className] = node2);
-      DOM.progress = DOM.timeline.querySelector("x-range");
-      DOM.volume = DOM.volume.querySelector("x-range");
-      this.DOM = DOM;
-    }
-    handleEvent(e) {
-      switch (e.type) {
-        case "idle-change":
-          let hasOptions = e.detail.includes("options");
-          let hasPlayer = e.detail.includes("player");
-          let hasMixer = e.detail.includes("mixer");
-          (hasOptions || hasPlayer || hasMixer) && this.updateStatus();
-          hasPlayer && this.updateCurrent();
-          break;
-      }
+      this.DOM = lookUpDOM(this);
     }
     onAppLoad() {
       this.addEvents();
       this.updateStatus();
       this.updateCurrent();
-      this.app.addEventListener("idle-change", this);
+      this.app.addEventListener("idle-change", (e) => this.onIdle(e.detail));
       setInterval(() => this.updateElapsed(), ELAPSED_PERIOD);
+    }
+    onIdle(changed) {
+      const hasOptions = changed.includes("options");
+      const hasPlayer = changed.includes("player");
+      const hasMixer = changed.includes("mixer");
+      if (hasOptions || hasPlayer || hasMixer) {
+        this.updateStatus();
+      }
+      if (hasPlayer) {
+        this.updateCurrent();
+      }
     }
     async updateStatus() {
       const { current, mpd } = this;
@@ -995,7 +1144,7 @@
       if (data.file) {
         DOM.title.textContent = data.Title || data.Name || fileName(data.file);
         DOM.subtitle.textContent = subtitle(data, { duration: false });
-        let duration = Number(data.duration);
+        const duration = Number(data.duration);
         if (duration) {
           DOM.duration.textContent = time(duration);
           DOM.progress.max = String(duration);
@@ -1016,14 +1165,14 @@
       if (data.file != current.song.file) {
         this.dispatchSongChange(data);
       }
-      let artistNew = data.Artist || data.AlbumArtist || "";
-      let artistOld = current.song["Artist"] || current.song["AlbumArtist"];
-      let albumNew = data["Album"];
-      let albumOld = current.song["Album"];
+      const artistNew = data.Artist || data.AlbumArtist || "";
+      const artistOld = current.song.Artist || current.song.AlbumArtist;
+      const albumNew = data.Album;
+      const albumOld = current.song.Album;
       Object.assign(current.song, data);
       if (artistNew != artistOld || albumNew != albumOld) {
         clear(DOM.art);
-        let src = await get(mpd, artistNew, data.Album || "", data.file);
+        const src = await get(mpd, artistNew, data.Album || "", data.file);
         if (src) {
           node("img", { src }, "", DOM.art);
         } else {
@@ -1034,19 +1183,19 @@
     updateElapsed() {
       const { current, DOM } = this;
       let elapsed = 0;
-      if (current.song["file"]) {
+      if (current.song.file) {
         elapsed = current.elapsed;
-        if (this.dataset.state == "play") {
+        if (this.dataset["state"] == "play") {
           elapsed += (performance.now() - current.at) / 1e3;
         }
       }
-      let progress = DOM.progress;
-      progress.value = String(elapsed);
+      DOM.progress.value = String(elapsed);
       DOM.elapsed.textContent = time(elapsed);
-      this.app.style.setProperty("--progress", String(elapsed / Number(progress.max)));
+      this.app.style.setProperty("--progress", String(elapsed / Number(DOM.progress.max)));
     }
     updateFlags(data) {
-      let flags = [];
+      var _a;
+      const flags = [];
       if (data.random == "1") {
         flags.push("random");
       }
@@ -1056,13 +1205,13 @@
       if (data.volume === "0") {
         flags.push("mute");
       }
-      this.dataset.flags = flags.join(" ");
-      this.dataset.state = data["state"];
+      this.dataset["flags"] = flags.join(" ");
+      this.dataset["state"] = (_a = data.state) != null ? _a : "";
     }
     updateVolume(data) {
       const { current, DOM } = this;
-      if ("volume" in data) {
-        let volume = Number(data.volume);
+      if (data.volume !== void 0) {
+        const volume = Number(data.volume);
         DOM.mute.disabled = false;
         DOM.volume.disabled = false;
         DOM.volume.value = String(volume);
@@ -1086,21 +1235,26 @@
       DOM.prev.addEventListener("click", (_) => mpd.command("previous"));
       DOM.next.addEventListener("click", (_) => mpd.command("next"));
       DOM.random.addEventListener("click", (_) => {
-        let isRandom = this.dataset.flags.split(" ").includes("random");
+        const isRandom = this.flags.includes("random");
         mpd.command(`random ${isRandom ? "0" : "1"}`);
       });
       DOM.repeat.addEventListener("click", (_) => {
-        let isRepeat = this.dataset.flags.split(" ").includes("repeat");
+        const isRepeat = this.flags.includes("repeat");
         mpd.command(`repeat ${isRepeat ? "0" : "1"}`);
       });
-      DOM.progress.addEventListener("input", (e) => {
-        let elapsed = e.target.valueAsNumber;
+      DOM.progress.addEventListener("input", (_) => {
+        const elapsed = DOM.progress.valueAsNumber;
         current.elapsed = elapsed;
         current.at = performance.now();
         mpd.command(`seekcur ${elapsed}`);
       });
-      DOM.volume.addEventListener("input", (e) => mpd.command(`setvol ${e.target.valueAsNumber}`));
+      DOM.volume.addEventListener("input", (_) => mpd.command(`setvol ${DOM.volume.valueAsNumber}`));
       DOM.mute.addEventListener("click", () => mpd.command(`setvol ${this.toggleVolume}`));
+    }
+    // the flags the server reported, e.g. "random repeat"
+    get flags() {
+      var _a;
+      return ((_a = this.dataset["flags"]) != null ? _a : "").split(" ");
     }
     dispatchSongChange(detail) {
       const e = new CustomEvent("song-change", { detail });
@@ -1121,7 +1275,8 @@
       return node("span", { className: "title" }, title, this);
     }
     matchPrefix(prefix2) {
-      const words = (this.textContent || "").toLowerCase().split(/[\s!-\/:-@\[-`{-~·]+/);
+      var _a;
+      const words = ((_a = this.textContent) != null ? _a : "").toLowerCase().split(/[\s!-\/:-@\[-`{-~·]+/);
       return words.some((word) => word.startsWith(prefix2));
     }
   };
@@ -1151,7 +1306,8 @@
       return this.data.file;
     }
     get songId() {
-      return this.data.Id;
+      var _a;
+      return (_a = this.data.Id) != null ? _a : "";
     }
     set playing(playing) {
       this.classList.toggle("playing", playing);
@@ -1163,55 +1319,54 @@
   customElements.define("cyp-song", Song);
 
   // app/js/elements/queue.ts
+  function songsOf(items) {
+    return items.filter((item) => item instanceof Song);
+  }
   function generateMoveCommands(items, diff, parent) {
-    let all = [...parent.children].filter((node2) => node2 instanceof Song);
-    const COMPARE = (a, b) => all.indexOf(a) - all.indexOf(b);
-    return items.sort(COMPARE).map((item) => {
-      let index = all.indexOf(item) + diff;
+    const all = [...parent.children].filter((node2) => node2 instanceof Song);
+    const compare = (a, b) => all.indexOf(a) - all.indexOf(b);
+    const commands = [];
+    for (const item of [...items].sort(compare)) {
+      const index = all.indexOf(item) + diff;
       if (index < 0 || index >= all.length) {
-        return null;
+        continue;
       }
-      return `moveid ${item.songId} ${index}`;
-    }).filter((command) => command);
+      commands.push(`moveid ${item.songId} ${index}`);
+    }
+    return commands;
   }
   var Queue = class extends Component {
-    handleEvent(e) {
-      switch (e.type) {
-        case "song-change":
-          this.currentId = e.detail["Id"];
-          this.updateCurrent();
-          break;
-        case "idle-change":
-          e.detail.includes("playlist") && this.sync();
-          break;
-      }
-    }
     onAppLoad() {
       const { app } = this;
-      this.selection = app.createSelection();
-      app.addEventListener("idle-change", this);
-      app.addEventListener("song-change", this);
+      app.addEventListener("idle-change", (e) => {
+        if (e.detail.includes("playlist")) {
+          this.sync();
+        }
+      });
+      app.addEventListener("song-change", (e) => {
+        this.currentId = e.detail.Id;
+        this.updateCurrent();
+      });
       this.sync();
     }
-    onComponentChange(c, isThis) {
+    onComponentChange(_c, isThis) {
       this.hidden = !isThis;
     }
     async sync() {
-      let songs = await this.mpd.listQueue();
+      const songs = await this.mpd.listQueue();
       this.buildSongs(songs);
-      let e = new CustomEvent("queue-length-change", { detail: songs.length });
-      this.app.dispatchEvent(e);
+      this.app.dispatchEvent(new CustomEvent("queue-length-change", { detail: songs.length }));
     }
     updateCurrent() {
-      let songs = [...this.children].filter((node2) => node2 instanceof Song);
+      const songs = [...this.children].filter((node2) => node2 instanceof Song);
       songs.forEach((node2) => {
         node2.playing = node2.songId == this.currentId;
       });
     }
     buildSongs(songs) {
       clear(this);
-      let nodes = songs.map((song) => {
-        let node2 = new Song(song);
+      const nodes = songs.map((song) => {
+        const node2 = new Song(song);
         node2.addButton("play", async () => {
           await this.mpd.command(`playid ${node2.songId}`);
         });
@@ -1223,17 +1378,17 @@
     }
     configureSelection(nodes) {
       const { mpd, selection } = this;
-      let commands = [{
+      const commands = [{
         cb: (items) => {
-          const commands2 = generateMoveCommands(items, -1, this);
-          mpd.command(commands2);
+          const moves = generateMoveCommands(songsOf(items), -1, this);
+          mpd.command(moves);
         },
         label: "Up",
         icon: "arrow-up-bold"
       }, {
         cb: (items) => {
-          const commands2 = generateMoveCommands(items, 1, this);
-          mpd.command(commands2.reverse());
+          const moves = generateMoveCommands(songsOf(items), 1, this);
+          mpd.command(moves.reverse());
         },
         label: "Down",
         icon: "arrow-down-bold"
@@ -1248,7 +1403,7 @@
             await mpd.command(`rm "${name}"`);
           } catch (e) {
           }
-          const commands2 = items.map((item) => {
+          const commands2 = songsOf(items).map((item) => {
             return `playlistadd "${name}" "${escape(item.file)}"`;
           });
           await mpd.command(commands2);
@@ -1258,10 +1413,11 @@
         icon: "content-save"
       }, {
         cb: async (items) => {
-          if (!confirm(`Remove these ${items.length} songs from the queue?`)) {
+          const selected = songsOf(items);
+          if (!confirm(`Remove these ${selected.length} songs from the queue?`)) {
             return;
           }
-          const commands2 = items.map((item) => `deleteid ${item.songId}`);
+          const commands2 = selected.map((item) => `deleteid ${item.songId}`);
           mpd.command(commands2);
         },
         label: "Remove",
@@ -1294,43 +1450,45 @@
   customElements.define("cyp-back", Back);
 
   // app/js/elements/playlists.ts
+  function songsOf2(items) {
+    return items.filter((item) => item instanceof Song);
+  }
+  function playlistsOf(items) {
+    return items.filter((item) => item instanceof Playlist);
+  }
   var Playlists = class extends Component {
-    handleEvent(e) {
-      switch (e.type) {
-        case "idle-change":
-          e.detail.includes("stored_playlist") && this.sync();
-          break;
-      }
-    }
     onAppLoad() {
       const { app } = this;
-      this.selection = app.createSelection();
-      app.addEventListener("idle-change", this);
+      app.addEventListener("idle-change", (e) => {
+        if (e.detail.includes("stored_playlist")) {
+          this.sync();
+        }
+      });
       this.sync();
     }
-    onComponentChange(c, isThis) {
+    onComponentChange(_c, isThis) {
       this.hidden = !isThis;
     }
     async sync() {
       if (this.current) {
-        let songs = await this.mpd.listPlaylistItems(this.current);
+        const songs = await this.mpd.listPlaylistItems(this.current);
         this.buildSongs(songs);
       } else {
-        let lists = await this.mpd.listPlaylists();
+        const lists = await this.mpd.listPlaylists();
         this.buildLists(lists);
       }
     }
     buildSongs(songs) {
       clear(this);
       this.buildBack();
-      let nodes = songs.map((song) => new Song(song));
+      const nodes = songs.map((song) => new Song(song));
       this.append(...nodes);
       this.configureSelectionSongs(nodes);
     }
     buildLists(lists) {
       clear(this);
-      let playlists = lists.map((name) => {
-        let node2 = new Playlist(name);
+      const playlists = lists.map((name) => {
+        const node2 = new Playlist(name);
         node2.addButton("chevron-double-right", () => {
           this.current = name;
           this.sync();
@@ -1350,16 +1508,16 @@
     }
     configureSelectionSongs(songs) {
       const { selection, mpd } = this;
-      let commands = [{
+      const commands = [{
         cb: async (items) => {
-          await mpd.command(["clear", ...items.map(createAddCommand), "play"]);
+          await mpd.command(["clear", ...songsOf2(items).map(createAddCommand), "play"]);
           selection.clear();
         },
         label: "Play",
         icon: "play"
       }, {
         cb: async (items) => {
-          await mpd.command(items.map(createAddCommand));
+          await mpd.command(songsOf2(items).map(createAddCommand));
           selection.clear();
         },
         label: "Enqueue",
@@ -1367,32 +1525,42 @@
       }];
       selection.configure(songs, "multi", commands);
     }
+    // Single selection: the callbacks act on the one selected playlist
     configureSelectionLists(lists) {
       const { mpd, selection } = this;
-      let commands = [{
-        cb: async (item) => {
-          const name = item.name;
-          const commands2 = ["clear", `load "${escape(name)}"`, "play"];
+      const commands = [{
+        cb: async (items) => {
+          const item = playlistsOf(items)[0];
+          if (!item) {
+            return;
+          }
+          const commands2 = ["clear", `load "${escape(item.name)}"`, "play"];
           await mpd.command(commands2);
           selection.clear();
         },
         label: "Play",
         icon: "play"
       }, {
-        cb: async (item) => {
-          const name = item.name;
-          await mpd.command(`load "${escape(name)}"`);
+        cb: async (items) => {
+          const item = playlistsOf(items)[0];
+          if (!item) {
+            return;
+          }
+          await mpd.command(`load "${escape(item.name)}"`);
           selection.clear();
         },
         label: "Enqueue",
         icon: "plus"
       }, {
-        cb: async (item) => {
-          const name = item.name;
-          if (!confirm(`Really delete playlist '${name}'?`)) {
+        cb: async (items) => {
+          const item = playlistsOf(items)[0];
+          if (!item) {
             return;
           }
-          await mpd.command(`rm "${escape(name)}"`);
+          if (!confirm(`Really delete playlist '${item.name}'?`)) {
+            return;
+          }
+          await mpd.command(`rm "${escape(item.name)}"`);
         },
         label: "Delete",
         icon: "delete"
@@ -1411,27 +1579,24 @@
     return localStorage.getItem(`${prefix}-${key}`);
   }
   function saveToStorage(key, value) {
-    return localStorage.setItem(`${prefix}-${key}`, String(value));
+    localStorage.setItem(`${prefix}-${key}`, String(value));
   }
   var Settings = class extends Component {
     constructor() {
       super(...arguments);
-      this.inputs = {
-        theme: this.querySelector("[name=theme]"),
-        ytLimit: this.querySelector("[name=yt-limit]"),
-        color: [...this.querySelectorAll("[name=color]")]
-      };
+      this.theme = query(this, "[name=theme]", HTMLSelectElement);
+      this.ytLimit = query(this, "[name=yt-limit]", HTMLSelectElement);
+      this.colors = [...this.querySelectorAll("[name=color]")].filter((input) => input instanceof HTMLInputElement);
     }
     onAppLoad() {
-      const { inputs } = this;
-      let mo = new MutationObserver((mrs) => {
-        mrs.forEach((mr) => this._onAppAttributeChange(mr));
+      const mo = new MutationObserver((mrs) => {
+        mrs.forEach((mr) => this.onAppAttributeChange(mr));
       });
       mo.observe(this.app, { attributes: true });
-      inputs.theme.addEventListener("change", (e) => this.setTheme(e.target.value));
-      inputs.ytLimit.addEventListener("change", (e) => this.setYtLimit(Number(e.target.value)));
-      inputs.color.forEach((input) => {
-        input.addEventListener("click", (e) => this.setColor(e.target.value));
+      this.theme.addEventListener("change", (_) => this.setTheme(this.theme.value));
+      this.ytLimit.addEventListener("change", (_) => this.setYtLimit(Number(this.ytLimit.value)));
+      this.colors.forEach((input) => {
+        input.addEventListener("click", (_) => this.setColor(input.value));
       });
       const theme = loadFromStorage("theme");
       theme ? this.app.setAttribute("theme", theme) : this.syncTheme();
@@ -1440,7 +1605,7 @@
       const ytLimit2 = loadFromStorage("ytLimit") || ytLimit;
       this.setYtLimit(Number(ytLimit2));
     }
-    _onAppAttributeChange(mr) {
+    onAppAttributeChange(mr) {
       if (mr.attributeName == "theme") {
         this.syncTheme();
       }
@@ -1449,12 +1614,15 @@
       }
     }
     syncTheme() {
-      this.inputs.theme.value = this.app.getAttribute("theme");
+      var _a;
+      this.theme.value = (_a = this.app.getAttribute("theme")) != null ? _a : "";
     }
     syncColor() {
-      this.inputs.color.forEach((input) => {
+      this.colors.forEach((input) => {
         input.checked = input.value == this.app.getAttribute("color");
-        input.parentElement.style.color = input.value;
+        if (input.parentElement) {
+          input.parentElement.style.color = input.value;
+        }
       });
     }
     setTheme(theme) {
@@ -1469,7 +1637,7 @@
       saveToStorage("ytLimit", ytLimit2);
       setYtLimit(ytLimit2);
     }
-    onComponentChange(c, isThis) {
+    onComponentChange(_c, isThis) {
       this.hidden = !isThis;
     }
   };
@@ -1479,6 +1647,8 @@
   var Search = class extends HTMLElement {
     constructor() {
       super();
+      this.onSubmit = () => {
+      };
       const form = node("form", {}, "", this);
       node("input", { type: "text" }, "", form);
       button({ icon: "magnify" }, "", form);
@@ -1494,9 +1664,7 @@
       this.input.value = value;
     }
     get input() {
-      return this.querySelector("input");
-    }
-    onSubmit() {
+      return query(this, "input", HTMLInputElement);
     }
     focus() {
       this.input.focus();
@@ -1518,13 +1686,20 @@
   customElements.define("cyp-yt-result", YtResult);
 
   // app/js/elements/yt.ts
+  function isResultList(data) {
+    return Array.isArray(data) && data.every((item) => {
+      return typeof item == "object" && item !== null && "title" in item && typeof item.title == "string" && "id" in item && typeof item.id == "string";
+    });
+  }
   var YT = class extends Component {
     constructor() {
       super();
       this.search = new Search();
       this.search.onSubmit = () => {
-        let query = this.search.value;
-        query && this.doSearch(query);
+        const query2 = this.search.value;
+        if (query2) {
+          this.doSearch(query2);
+        }
       };
       this.clear();
     }
@@ -1532,47 +1707,55 @@
       clear(this);
       this.append(this.search);
     }
-    async doSearch(query) {
+    async doSearch(query2) {
       this.clear();
       this.search.pending(true);
-      let url = `youtube?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(ytLimit)}`;
-      let response = await fetch(url);
+      const url = `youtube?q=${encodeURIComponent(query2)}&limit=${encodeURIComponent(ytLimit)}`;
+      const response = await fetch(url);
       if (response.status == 200) {
-        let results = await response.json();
-        results.forEach((result) => {
-          let node2 = new YtResult(result.title);
-          this.append(node2);
-          node2.addButton("download", () => this.download(result.id));
-        });
+        const results = await response.json();
+        if (isResultList(results)) {
+          results.forEach((result) => {
+            const node2 = new YtResult(result.title);
+            this.append(node2);
+            node2.addButton("download", () => this.download(result.id));
+          });
+        }
       } else {
-        let text2 = await response.text();
-        alert(text2);
+        alert(await response.text());
       }
       this.search.pending(false);
     }
     async download(id) {
       this.clear();
-      let pre = node("pre", {}, "", this);
+      const pre = node("pre", {}, "", this);
       this.search.pending(true);
-      let body = new URLSearchParams();
+      const body = new URLSearchParams();
       body.set("id", id);
-      let response = await fetch("youtube", { method: "POST", body });
-      let reader = response.body.getReader();
-      while (true) {
-        let { done, value } = await reader.read();
-        if (done) {
-          break;
+      const response = await fetch("youtube", { method: "POST", body });
+      let output = "";
+      if (response.body) {
+        const reader = response.body.getReader();
+        for (; ; ) {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            break;
+          }
+          const text2 = decoder.decode(chunk.value, { stream: true });
+          output += text2;
+          pre.textContent += text2;
+          pre.scrollTop = pre.scrollHeight;
         }
-        pre.textContent += decodeChunk(value);
-        pre.scrollTop = pre.scrollHeight;
+        reader.releaseLock();
       }
-      reader.releaseLock();
       this.search.pending(false);
-      if (response.status == 200) {
+      if (response.status == 200 && output.includes("[cyp] done")) {
         this.mpd.command(`update ${escape(ytPath)}`);
+      } else {
+        pre.textContent += "\nDownload did not finish. Nothing was added to the library.\n";
       }
     }
-    onComponentChange(c, isThis) {
+    onComponentChange(_c, isThis) {
       const wasHidden = this.hidden;
       this.hidden = !isThis;
       if (!wasHidden && isThis) {
@@ -1582,9 +1765,6 @@
   };
   customElements.define("cyp-yt", YT);
   var decoder = new TextDecoder("utf-8");
-  function decodeChunk(byteArray) {
-    return decoder.decode(byteArray).replace(/\u000d/g, "\n");
-  }
 
   // app/js/elements/tag.ts
   var ICONS2 = {
@@ -1605,25 +1785,28 @@
       return Object.assign({ [this.type]: this.value }, this.filter);
     }
     async fillArt(mpd) {
-      const parent = this.firstChild;
+      const parent = this.firstElementChild;
+      if (!(parent instanceof HTMLElement)) {
+        return;
+      }
       const filter = this.createChildFilter();
-      let artist = filter["AlbumArtist"];
-      let album = filter["Album"];
+      const artist = filter["AlbumArtist"];
+      const album = filter["Album"];
       let src = null;
       if (artist && album) {
         src = await get(mpd, artist, album);
         if (!src) {
-          let songs = await mpd.listSongs(filter, [0, 1]);
-          if (songs.length) {
-            src = await get(mpd, artist, album, songs[0]["file"]);
+          const songs = await mpd.listSongs(filter, [0, 1]);
+          const first = songs[0];
+          if (first) {
+            src = await get(mpd, artist, album, first.file);
           }
         }
       }
       if (src) {
         node("img", { src }, "", parent);
       } else {
-        const icon2 = ICONS2[this.type];
-        icon(icon2, parent);
+        icon(ICONS2[this.type], parent);
       }
     }
   };
@@ -1645,7 +1828,8 @@
       }
     }
     get file() {
-      return this.isDirectory ? this.data.directory : this.data.file;
+      var _a;
+      return (_a = this.isDirectory ? this.data.directory : this.data.file) != null ? _a : "";
     }
   };
   customElements.define("cyp-path", Path);
@@ -1657,7 +1841,7 @@
       super();
       node("input", { type: "text" }, "", this);
       icon("filter-variant", this);
-      this.input.addEventListener("input", (e) => this.apply());
+      this.input.addEventListener("input", (_) => this.apply());
     }
     get value() {
       return this.input.value.trim();
@@ -1666,27 +1850,38 @@
       this.input.value = value;
     }
     get input() {
-      return this.querySelector("input");
+      return query(this, "input", HTMLInputElement);
     }
     apply() {
-      let value = this.value.toLowerCase();
-      let all = [...this.parentNode.querySelectorAll(SELECTOR)];
-      all.forEach((item) => item.hidden = !item.matchPrefix(value));
+      const value = this.value.toLowerCase();
+      const parent = this.parentNode;
+      if (!parent) {
+        return;
+      }
+      [...parent.querySelectorAll(SELECTOR)].forEach((item) => {
+        if (item instanceof Item) {
+          item.hidden = !item.matchPrefix(value);
+        }
+      });
     }
   };
   customElements.define("cyp-filter", Filter);
 
   // app/js/elements/file-tools.ts
+  var SORT_KEYS = ["name", "modified"];
   var STORAGE_KEY = "cyp-library-sort";
   var DEBOUNCE = 400;
   var LABELS = {
     name: "Name",
     modified: "Date"
   };
+  function isSortOrder(data) {
+    return typeof data == "object" && data !== null && "key" in data && (data.key == "name" || data.key == "modified") && "desc" in data && typeof data.desc == "boolean";
+  }
   function loadSort() {
     try {
       const data = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-      if (data && (data.key == "name" || data.key == "modified") && typeof data.desc == "boolean") {
+      if (isSortOrder(data)) {
         return { key: data.key, desc: data.desc };
       }
     } catch (e) {
@@ -1710,6 +1905,10 @@
       super();
       this.order = loadSort();
       this.lastQuery = "";
+      this.onSearch = () => {
+      };
+      this.onSort = () => {
+      };
       this.form = node("form", {}, "", this);
       icon("magnify", this.form);
       this.input = node("input", {
@@ -1732,9 +1931,9 @@
         name: button({ type: "button" }, "", sort),
         modified: button({ type: "button" }, "", sort)
       };
-      Object.keys(this.buttons).forEach((key) => {
+      for (const key of SORT_KEYS) {
         this.buttons[key].addEventListener("click", (_) => this.toggleSort(key));
-      });
+      }
       this.syncButtons();
     }
     get value() {
@@ -1748,21 +1947,17 @@
     get sort() {
       return __spreadValues({}, this.order);
     }
-    onSearch(query) {
-    }
-    onSort(order) {
-    }
     pending(pending) {
       this.classList.toggle("pending", pending);
     }
     submit() {
       clearTimeout(this.timeout);
-      const query = this.value;
-      if (query == this.lastQuery) {
+      const query2 = this.value;
+      if (query2 == this.lastQuery) {
         return;
       }
-      this.lastQuery = query;
-      this.onSearch(query);
+      this.lastQuery = query2;
+      this.onSearch(query2);
     }
     toggleSort(key) {
       if (this.order.key == key) {
@@ -1775,21 +1970,21 @@
       this.onSort(this.sort);
     }
     syncButtons() {
-      Object.keys(this.buttons).forEach((key) => {
-        const button2 = this.buttons[key];
+      for (const key of SORT_KEYS) {
+        const button3 = this.buttons[key];
         const active = this.order.key == key;
-        clear(button2);
-        text(LABELS[key], button2);
-        button2.classList.toggle("active", active);
-        button2.setAttribute("aria-pressed", String(active));
+        clear(button3);
+        text(LABELS[key], button3);
+        button3.classList.toggle("active", active);
+        button3.setAttribute("aria-pressed", String(active));
         if (active) {
-          icon(this.order.desc ? "arrow-down-bold" : "arrow-up-bold", button2);
+          icon(this.order.desc ? "arrow-down-bold" : "arrow-up-bold", button3);
           const next = { key, desc: !this.order.desc };
-          button2.title = `Sorted by ${describe(this.order)}. Click for ${describe(next)}.`;
+          button3.title = `Sorted by ${describe(this.order)}. Click for ${describe(next)}.`;
         } else {
-          button2.title = `Sort by ${describe({ key, desc: key == "modified" })}`;
+          button3.title = `Sort by ${describe({ key, desc: key == "modified" })}`;
         }
-      });
+      }
     }
   };
   customElements.define("cyp-file-tools", FileTools);
@@ -1803,6 +1998,9 @@
     "AlbumArtist": "Artists",
     "Genre": "Genres"
   };
+  function songsOf3(items) {
+    return items.filter((item) => item instanceof Song || item instanceof Path || item instanceof Tag);
+  }
   var Library = class extends Component {
     constructor() {
       super();
@@ -1814,30 +2012,33 @@
       this.pathNodes = [];
       this.pathToken = 0;
       this.search.onSubmit = () => {
-        let query = this.search.value;
-        if (query.length < 3) {
+        const query2 = this.search.value;
+        if (query2.length < 3) {
           return;
         }
-        this.doSearch(query);
+        this.doSearch(query2);
       };
-      this.fileTools.onSearch = (query) => this.searchPath(query);
+      this.fileTools.onSearch = (query2) => this.searchPath(query2);
       this.fileTools.onSort = () => this.renderPathEntries();
+    }
+    // the state on top of the stack, the one shown; undefined when nothing was pushed
+    topState(depth = 0) {
+      return this.stateStack[this.stateStack.length - 1 - depth];
     }
     popState() {
       this.selection.clear();
       this.stateStack.pop();
-      if (this.stateStack.length > 0) {
-        let state = this.stateStack[this.stateStack.length - 1];
+      const state = this.topState();
+      if (state) {
         this.showState(state);
       } else {
         this.showRoot();
       }
     }
     onAppLoad() {
-      this.selection = this.app.createSelection();
       this.showRoot();
     }
-    onComponentChange(c, isThis) {
+    onComponentChange(_c, isThis) {
       const wasHidden = this.hidden;
       this.hidden = !isThis;
       if (!wasHidden && isThis) {
@@ -1880,36 +2081,40 @@
       if ("AlbumArtist" in filter || "Genre" in filter) {
         this.buildBack();
       }
-      values.length > 0 && this.addFilter();
-      let nodes = values.map((value) => this.buildTag(tag, value, filter));
+      if (values.length > 0) {
+        this.addFilter();
+      }
+      const nodes = values.map((value) => this.buildTag(tag, value, filter));
       this.append(...nodes);
-      let albumNodes = nodes.filter((node2) => node2.type == "Album");
+      const albumNodes = nodes.filter((node2) => node2.type == "Album");
       this.configureSelection(albumNodes);
     }
-    async listPath(path, query = "") {
+    async listPath(path, query2 = "") {
       const token = ++this.pathToken;
-      const entries = await this.loadPathEntries(path, query);
+      const entries = await this.loadPathEntries(path, query2);
       if (token != this.pathToken) {
         return;
       }
       clear(this);
-      path && this.buildBack();
+      if (path) {
+        this.buildBack();
+      }
       this.append(this.fileTools);
-      this.fileTools.value = query;
+      this.fileTools.value = query2;
       this.fileTools.pending(false);
       this.pathEntries = entries;
       this.pathNodes = [];
       this.renderPathEntries();
     }
-    async searchPath(query) {
-      const state = this.stateStack[this.stateStack.length - 1];
+    async searchPath(query2) {
+      const state = this.topState();
       if (!state || state.type != "path") {
         return;
       }
-      state.query = query;
+      state.query = query2;
       const token = ++this.pathToken;
       this.fileTools.pending(true);
-      const entries = await this.loadPathEntries(state.path, query);
+      const entries = await this.loadPathEntries(state.path, query2);
       if (token != this.pathToken) {
         return;
       }
@@ -1917,45 +2122,46 @@
       this.pathEntries = entries;
       this.renderPathEntries();
     }
-    async loadPathEntries(path, query) {
+    async loadPathEntries(path, query2) {
       try {
-        if (!query) {
+        if (!query2) {
           return await this.readPath(path);
         }
-        if (query.length < MIN_PATH_QUERY) {
+        if (query2.length < MIN_PATH_QUERY) {
           return [];
         }
-        return await this.findInPath(path, query);
+        return await this.findInPath(path, query2);
       } catch (e) {
-        console.warn("Cannot list path", path, query, e);
+        console.warn("Cannot list path", path, query2, e);
         return [];
       }
     }
     /** Contents of one directory (lsinfo). */
     async readPath(path) {
       const paths = await this.mpd.listPath(path);
-      return [...paths["directory"], ...paths["file"]].map((data) => createPathEntry(data));
+      return [...paths.directory, ...paths.file].map((data) => createPathEntry(data));
     }
     /**
      * Search the MPD database below `base`: folders and files whose name contains the query,
      * plus songs whose Title tag contains it.
      */
-    async findInPath(base, query) {
+    async findInPath(base, query2) {
       const [byFile, byTitle] = await Promise.all([
-        this.mpd.searchTag("file", query, base),
-        this.mpd.searchTag("Title", query, base)
+        this.mpd.searchTag("file", query2, base),
+        this.mpd.searchTag("Title", query2, base)
       ]);
-      const needle = query.toLowerCase();
+      const needle = query2.toLowerCase();
       const prefix2 = base ? `${base}/` : "";
       const dirs = /* @__PURE__ */ new Map();
       const files = /* @__PURE__ */ new Map();
       byFile.forEach((song) => {
+        var _a;
         if (!song.file.startsWith(prefix2)) {
           return;
         }
         const modified = parseDate(song["Last-Modified"]);
         const segments = song.file.substring(prefix2.length).split("/");
-        const name = segments.pop();
+        const name = (_a = segments.pop()) != null ? _a : "";
         let dir = base;
         segments.forEach((segment) => {
           dir = dir ? `${dir}/${segment}` : segment;
@@ -1981,32 +2187,37 @@
       return [...dirEntries, ...files.values()];
     }
     renderPathEntries() {
-      const state = this.stateStack[this.stateStack.length - 1];
+      const state = this.topState();
       if (!state || state.type != "path") {
         return;
       }
       this.selection.clear();
       this.pathNodes.forEach((node2) => node2.remove());
-      const query = state.query || "";
+      const query2 = state.query || "";
       const order = this.fileTools.sort;
       const sorted = sortPathEntries(this.pathEntries, order);
       const shown = sorted.slice(0, MAX_PATH_RESULTS);
       const nodes = shown.map((entry) => {
+        var _a;
         const tokens = [];
-        entry.parent !== void 0 && tokens.push(entry.parent || "/");
-        order.key == "modified" && entry.modified && tokens.push(formatDate(entry.modified));
+        if (entry.parent !== void 0) {
+          tokens.push(entry.parent || "/");
+        }
+        if (order.key == "modified" && entry.modified) {
+          tokens.push(formatDate(entry.modified));
+        }
         const node2 = new Path(entry.data, tokens.join(SEPARATOR));
         if (entry.isDirectory) {
-          const path = entry.data.directory;
+          const path = (_a = entry.data.directory) != null ? _a : "";
           node2.addButton("chevron-double-right", () => this.pushState({ type: "path", path }));
         }
         return node2;
       });
       let message = "";
-      if (query && query.length < MIN_PATH_QUERY) {
+      if (query2 && query2.length < MIN_PATH_QUERY) {
         message = `Type at least ${MIN_PATH_QUERY} characters to search`;
-      } else if (query && sorted.length == 0) {
-        message = `Nothing found for \u201C${query}\u201D`;
+      } else if (query2 && sorted.length == 0) {
+        message = `Nothing found for \u201C${query2}\u201D`;
       } else if (sorted.length > shown.length) {
         message = `Showing ${shown.length} of ${sorted.length} results, refine your search`;
       }
@@ -2021,45 +2232,49 @@
       const songs = await this.mpd.listSongs(filter);
       clear(this);
       this.buildBack();
-      songs.length > 0 && this.addFilter();
-      let nodes = songs.map((song) => new Song(song));
+      if (songs.length > 0) {
+        this.addFilter();
+      }
+      const nodes = songs.map((song) => new Song(song));
       this.append(...nodes);
       this.configureSelection(nodes);
     }
-    showSearch(query = "") {
+    showSearch(query2 = "") {
       clear(this);
       this.append(this.search);
-      this.search.value = query;
+      this.search.value = query2;
       this.search.focus();
-      query && this.search.onSubmit();
+      if (query2) {
+        this.search.onSubmit();
+      }
     }
-    async doSearch(query) {
-      this.stateStack[this.stateStack.length - 1] = {
-        type: "search",
-        query
-      };
+    async doSearch(query2) {
+      const index = this.stateStack.length - 1;
+      if (index >= 0) {
+        this.stateStack[index] = { type: "search", query: query2 };
+      }
       clear(this);
       this.append(this.search);
       this.search.pending(true);
-      const songs1 = await this.mpd.searchSongs({ "AlbumArtist": query });
-      const songs2 = await this.mpd.searchSongs({ "Album": query });
-      const songs3 = await this.mpd.searchSongs({ "Title": query });
+      const songs1 = await this.mpd.searchSongs({ "AlbumArtist": query2 });
+      const songs2 = await this.mpd.searchSongs({ "Album": query2 });
+      const songs3 = await this.mpd.searchSongs({ "Title": query2 });
       this.search.pending(false);
-      let nodes1 = this.aggregateSearch(songs1, "AlbumArtist");
-      let nodes2 = this.aggregateSearch(songs2, "Album");
-      let nodes3 = songs3.map((song) => new Song(song));
+      const nodes1 = this.aggregateSearch(songs1, "AlbumArtist");
+      const nodes2 = this.aggregateSearch(songs2, "Album");
+      const nodes3 = songs3.map((song) => new Song(song));
       this.append(...nodes1, ...nodes2, ...nodes3);
-      let selectableNodes = [...nodes2, ...nodes3];
+      const selectableNodes = [...nodes2, ...nodes3];
       this.configureSelection(selectableNodes);
     }
     aggregateSearch(songs, tag) {
-      let results = /* @__PURE__ */ new Map();
-      let nodes = [];
+      const results = /* @__PURE__ */ new Map();
       songs.forEach((song) => {
-        let filter = {}, value;
+        const filter = {};
         const artist = song.AlbumArtist || song.Artist;
+        let value;
         if (tag == "Album") {
-          value = song[tag];
+          value = song.Album;
           if (artist) {
             filter["AlbumArtist"] = artist;
           }
@@ -2067,16 +2282,19 @@
         if (tag == "AlbumArtist") {
           value = artist;
         }
-        results.set(value, filter);
+        if (value !== void 0) {
+          results.set(value, filter);
+        }
       });
+      const nodes = [];
       results.forEach((filter, value) => {
-        let node2 = this.buildTag(tag, value, filter);
+        const node2 = this.buildTag(tag, value, filter);
         nodes.push(node2);
       });
       return nodes;
     }
     buildTag(tag, value, filter) {
-      let node2 = new Tag(tag, value, filter);
+      const node2 = new Tag(tag, value, filter);
       node2.fillArt(this.mpd);
       switch (tag) {
         case "AlbumArtist":
@@ -2090,7 +2308,10 @@
       return node2;
     }
     buildBack() {
-      const backState = this.stateStack[this.stateStack.length - 2];
+      const backState = this.topState(1);
+      if (!backState) {
+        return;
+      }
       let title = "";
       switch (backState.type) {
         case "path":
@@ -2113,9 +2334,9 @@
     }
     configureSelection(items) {
       const { selection, mpd } = this;
-      let commands = [{
+      const commands = [{
         cb: async (items2) => {
-          const commands2 = ["clear", ...items2.map(createEnqueueCommand), "play"];
+          const commands2 = ["clear", ...songsOf3(items2).map(createEnqueueCommand), "play"];
           await mpd.command(commands2);
           selection.clear();
         },
@@ -2123,7 +2344,7 @@
         icon: "play"
       }, {
         cb: async (items2) => {
-          const commands2 = items2.map(createEnqueueCommand);
+          const commands2 = songsOf3(items2).map(createEnqueueCommand);
           await mpd.command(commands2);
           selection.clear();
         },
@@ -2175,7 +2396,7 @@
       if (a.isDirectory != b.isDirectory) {
         return a.isDirectory ? -1 : 1;
       }
-      let diff = order.key == "modified" ? a.modified - b.modified : collator.compare(a.name, b.name);
+      const diff = order.key == "modified" ? a.modified - b.modified : collator.compare(a.name, b.name);
       if (diff) {
         return diff * sign;
       }
@@ -2185,14 +2406,295 @@
   function createEnqueueCommand(node2) {
     if (node2 instanceof Song || node2 instanceof Path) {
       return `add "${escape(node2.file)}"`;
-    } else if (node2 instanceof Tag) {
+    } else {
       return [
         "findadd",
         serializeFilter(node2.createChildFilter())
         // `sort ${SORT}` // MPD >= 0.22, not yet released
       ].join(" ");
-    } else {
-      throw new Error(`Cannot create enqueue command for "${node2.nodeName}"`);
     }
+  }
+
+  // app/js/elements/fetch-settings.ts
+  var MAX_ERROR_LINES = 3;
+  var enabledInput = byId("fetch-enabled", HTMLInputElement);
+  var urlInput = byId("fetch-url", HTMLInputElement);
+  var keyInput = byId("fetch-key", HTMLInputElement);
+  var keyToggle = byId("fetch-key-toggle", HTMLButtonElement);
+  var dirInput = byId("fetch-dir", HTMLInputElement);
+  var intervalInput = byId("fetch-interval", HTMLInputElement);
+  var rsgainInput = byId("fetch-rsgain", HTMLInputElement);
+  var saveButton = byId("fetch-save", HTMLButtonElement);
+  var runButton = byId("fetch-run", HTMLButtonElement);
+  var statusLine = byId("fetch-status", HTMLDivElement);
+  var resultBox = byId("fetch-result", HTMLDivElement);
+  var syncRunning = false;
+  var syncStopping = false;
+  var savedEnabled = false;
+  function setStatus(text2) {
+    statusLine.textContent = text2;
+  }
+  var megabytes = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
+  var gigabytes = (bytes) => (bytes / (1024 * 1024 * 1024)).toFixed(2);
+  async function loadSettings2() {
+    try {
+      const res = await fetch("/fetch/settings", { cache: "no-store" });
+      const s = await res.json();
+      enabledInput.checked = s.enabled;
+      urlInput.value = s.url;
+      keyInput.value = s.key;
+      dirInput.value = s.dir;
+      dirInput.placeholder = `Default: ${s.musicDir}`;
+      intervalInput.value = String(s.intervalMinutes);
+      rsgainInput.checked = s.rsgain;
+      savedEnabled = s.enabled;
+      updateRunButton();
+    } catch (e) {
+      setStatus(`Could not load the settings: ${e}`);
+    }
+  }
+  keyToggle.addEventListener("click", () => {
+    const hidden = keyInput.type == "password";
+    keyInput.type = hidden ? "text" : "password";
+    keyToggle.textContent = hidden ? "Hide" : "Show";
+  });
+  saveButton.addEventListener("click", async () => {
+    const body = {
+      enabled: enabledInput.checked,
+      url: urlInput.value,
+      key: keyInput.value,
+      dir: dirInput.value,
+      intervalMinutes: Number(intervalInput.value),
+      rsgain: rsgainInput.checked
+    };
+    const res = await fetch("/fetch/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data.ok) {
+      savedEnabled = data.settings.enabled;
+    }
+    updateRunButton();
+    setStatus(data.ok ? "Saved." : `Not saved: ${data.error}`);
+  });
+  function statusLineEl(text2, className = "fetch-line") {
+    return node("div", { className, title: text2 }, text2);
+  }
+  function countLines(p) {
+    return [
+      statusLineEl(`Downloaded ${p.downloaded} \xB7 Already there ${p.alreadyThere} \xB7 Conflicts ${p.conflicts} \xB7 Failed ${p.failed}`),
+      statusLineEl(`Copied ${megabytes(p.bytesDone)} MB of ${megabytes(p.bytesTotal)} MB \xB7 Library ${p.libraryFiles} files / ${gigabytes(p.librarySize)} GB`)
+    ];
+  }
+  function renderProgress(p) {
+    const lines = [];
+    if (p.running) {
+      if (p.updatingLibrary) {
+        lines.push(statusLineEl("Updating the library\u2026"));
+      } else {
+        lines.push(statusLineEl(p.stopping ? "Stopping after the current chunk\u2026" : `Copying ${p.index} of ${p.total}: ${p.current}`));
+      }
+      lines.push(...countLines(p));
+    } else if (p.result) {
+      if (p.result.stopped) {
+        lines.push(statusLineEl("Stopped by you. Copied files were kept."));
+      }
+      if (p.reindexed) {
+        lines.push(statusLineEl("Library updated."));
+      }
+      if (p.downloaded > 0 || p.failed > 0 || p.conflicts > 0) {
+        lines.push(...countLines(p));
+      }
+      const shown = p.errors.slice(0, MAX_ERROR_LINES);
+      for (const e of shown) {
+        lines.push(statusLineEl(`Error: ${e}`, "fetch-line fetch-error"));
+      }
+      if (p.errors.length > shown.length) {
+        lines.push(statusLineEl(`\u2026and ${p.errors.length - shown.length} more errors`, "fetch-line fetch-error"));
+      }
+      if (!p.result.ok && p.result.error) {
+        lines.push(statusLineEl(`Error: ${p.result.error}`, "fetch-line fetch-error"));
+      }
+    }
+    resultBox.replaceChildren(...lines);
+  }
+  function updateRunButton() {
+    runButton.textContent = syncRunning ? "Stop" : "Sync now";
+    runButton.disabled = syncStopping || !syncRunning && !savedEnabled;
+    saveButton.disabled = syncRunning;
+  }
+  function setRunning(running, stopping = false) {
+    syncRunning = running;
+    syncStopping = running && stopping;
+    updateRunButton();
+  }
+  var pollTimer = null;
+  async function pollProgress() {
+    var _a, _b;
+    try {
+      const res = await fetch("/fetch/status", { cache: "no-store" });
+      const p = await res.json();
+      renderProgress(p);
+      if (p.running) {
+        setRunning(true, p.stopping);
+        setStatus(p.updatingLibrary ? "Updating library..." : p.stopping ? "Stopping..." : "Syncing...");
+        return;
+      }
+      if (pollTimer !== null) {
+        clearInterval(pollTimer);
+      }
+      pollTimer = null;
+      setRunning(false);
+      setStatus(((_a = p.result) == null ? void 0 : _a.stopped) ? "Stopped" : ((_b = p.result) == null ? void 0 : _b.ok) ? "Sync finished" : "Sync failed");
+    } catch (e) {
+      setStatus(`Could not read the sync progress: ${e}`);
+    }
+  }
+  function startPolling() {
+    if (pollTimer === null) {
+      pollTimer = window.setInterval(pollProgress, 1e3);
+    }
+    pollProgress();
+  }
+  runButton.addEventListener("click", async () => {
+    if (syncRunning) {
+      setRunning(true, true);
+      setStatus("Stopping...");
+      await fetch("/fetch/stop", { method: "POST" });
+      return;
+    }
+    resultBox.replaceChildren();
+    const res = await fetch("/fetch/run", { method: "POST" });
+    const data = await res.json();
+    if (!data.ok) {
+      setStatus("Not started");
+      resultBox.replaceChildren(statusLineEl(data.error, "fetch-line fetch-error"));
+      return;
+    }
+    setStatus("Syncing...");
+    setRunning(true);
+    startPolling();
+  });
+  async function resumeIfRunning() {
+    const res = await fetch("/fetch/status", { cache: "no-store" });
+    const p = await res.json();
+    if (p.running) {
+      setRunning(true, p.stopping);
+      startPolling();
+    }
+  }
+  updateRunButton();
+  loadSettings2();
+  resumeIfRunning();
+
+  // app/js/elements/shutdown.ts
+  var shutdownButton = document.getElementById("shutdown-btn");
+  async function isHostAlive() {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 2e3);
+    try {
+      await fetch("/settings", { method: "GET", cache: "no-store", signal: controller.signal });
+      return true;
+    } catch (e) {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  function watchForShutdown(button3) {
+    const pingInterval = window.setInterval(async () => {
+      const alive = await isHostAlive();
+      if (!alive) {
+        clearInterval(pingInterval);
+        button3.textContent = "Switched off";
+      }
+    }, 2e3);
+  }
+  if (shutdownButton instanceof HTMLButtonElement) {
+    const button3 = shutdownButton;
+    button3.addEventListener("click", async () => {
+      if (!confirm("Shut down the system now?")) {
+        return;
+      }
+      beginShutdown();
+      button3.disabled = true;
+      button3.textContent = "Shutting down\u2026";
+      await fetch("/shutdown", { method: "POST" });
+      watchForShutdown(button3);
+    });
+  }
+
+  // app/js/elements/refresh.ts
+  var IDLE_LABEL = "Refresh content";
+  var FINISHED_MS = 2e3;
+  var POLL_MS = 2e3;
+  var button2 = document.getElementById("refresh-btn");
+  function setupRefreshButton(button3) {
+    let wasUpdating = false;
+    let resetTimer = null;
+    function show(label, disabled) {
+      button3.textContent = label;
+      button3.disabled = disabled;
+    }
+    function flashFinished(ok) {
+      if (resetTimer !== null) {
+        clearTimeout(resetTimer);
+      }
+      show(ok ? "Done!" : "Failed", true);
+      resetTimer = window.setTimeout(() => {
+        resetTimer = null;
+        show(IDLE_LABEL, false);
+      }, FINISHED_MS);
+    }
+    function render(status) {
+      if (status.updating) {
+        if (resetTimer !== null) {
+          clearTimeout(resetTimer);
+          resetTimer = null;
+        }
+        show(status.source == "sync" ? "Updating after sync\u2026" : "Refreshing\u2026", true);
+        wasUpdating = true;
+        return;
+      }
+      if (wasUpdating) {
+        wasUpdating = false;
+        if (status.ok === false) {
+          button3.title = status.error;
+        } else {
+          button3.title = "";
+        }
+        flashFinished(status.ok !== false);
+      }
+    }
+    async function poll() {
+      try {
+        const res = await fetch("/library/status", { cache: "no-store" });
+        const status = await res.json();
+        render(status);
+      } catch (e) {
+      }
+    }
+    button3.addEventListener("click", async () => {
+      show("Refreshing\u2026", true);
+      try {
+        const res = await fetch("/refresh", { method: "POST" });
+        const data = await res.json();
+        if (data.ok) {
+          wasUpdating = true;
+        } else {
+          flashFinished(false);
+          button3.title = data.error;
+        }
+      } catch (e) {
+        flashFinished(false);
+      }
+    });
+    poll();
+    window.setInterval(poll, POLL_MS);
+  }
+  if (button2 instanceof HTMLButtonElement) {
+    setupRefreshButton(button2);
   }
 })();

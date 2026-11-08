@@ -1,7 +1,7 @@
 import Item from "../item.js";
 import * as html from "../html.js";
 import * as format from "../format.js";
-import { PathData } from "../parser.js";
+import type { PathData } from "../parser.js";
 
 
 export default class Path extends Item {
@@ -21,7 +21,9 @@ export default class Path extends Item {
 		}
 	}
 
-	get file() { return (this.isDirectory ? this.data.directory : this.data.file) as string; }
+	get file(): string {
+		return (this.isDirectory ? this.data.directory : this.data.file) ?? "";
+	}
 }
 
 customElements.define("cyp-path", Path);

@@ -4,7 +4,7 @@ import * as html from "../html.js";
 
 export default class YtResult extends Item {
 	constructor(title: string) {
-		super()
+		super();
 		this.append(html.icon("magnify"));
 		this.buildTitle(title);
 	}

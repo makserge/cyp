@@ -2,62 +2,54 @@ import * as html from "../html.js";
 import Component from "../component.js";
 import Song from "./song.js";
 import { escape } from "../mpd.js";
-import Selection from "../selection.js";
-import { SongData } from "../parser.js";
+import type { SongData } from "../parser.js";
 
 
-function generateMoveCommands(items: Song[], diff: number, parent: HTMLElement) {
-	let all = [...parent.children].filter(node => node instanceof Song);
-	const COMPARE = (a: Song, b: Song) => all.indexOf(a) - all.indexOf(b);
+function songsOf(items: HTMLElement[]): Song[] {
+	return items.filter((item): item is Song => item instanceof Song);
+}
 
-	return items.sort(COMPARE)
-		.map(item => {
-			let index = all.indexOf(item) + diff;
-			if (index < 0 || index >= all.length) { return null; } // this does not move
-			return `moveid ${item.songId} ${index}`;
-		})
-		.filter(command => command) as string[];
+function generateMoveCommands(items: Song[], diff: number, parent: HTMLElement): string[] {
+	const all = [...parent.children].filter((node): node is Song => node instanceof Song);
+	const compare = (a: Song, b: Song) => all.indexOf(a) - all.indexOf(b);
+
+	const commands: string[] = [];
+	for (const item of [...items].sort(compare)) {
+		const index = all.indexOf(item) + diff;
+		if (index < 0 || index >= all.length) { continue; } // this does not move
+		commands.push(`moveid ${item.songId} ${index}`);
+	}
+	return commands;
 }
 
 class Queue extends Component {
-	protected selection!: Selection;
 	protected currentId?: string;
 
-	handleEvent(e: CustomEvent) {
-		switch (e.type) {
-			case "song-change":
-				this.currentId = e.detail["Id"];
-				this.updateCurrent();
-			break;
-
-			case "idle-change":
-				e.detail.includes("playlist") && this.sync();
-			break;
-		}
-	}
-
-	protected onAppLoad() {
+	protected override onAppLoad() {
 		const { app } = this;
-		this.selection = app.createSelection();
-		app.addEventListener("idle-change", this);
-		app.addEventListener("song-change", this);
+		app.addEventListener("idle-change", e => {
+			if (e.detail.includes("playlist")) { this.sync(); }
+		});
+		app.addEventListener("song-change", e => {
+			this.currentId = e.detail.Id;
+			this.updateCurrent();
+		});
 		this.sync();
 	}
 
-	protected onComponentChange(c: string, isThis: boolean) {
+	protected override onComponentChange(_c: string, isThis: boolean) {
 		this.hidden = !isThis;
 	}
 
 	protected async sync() {
-		let songs = await this.mpd.listQueue();
+		const songs = await this.mpd.listQueue();
 		this.buildSongs(songs);
 
-		let e = new CustomEvent("queue-length-change", {detail:songs.length});
-		this.app.dispatchEvent(e);
+		this.app.dispatchEvent(new CustomEvent("queue-length-change", {detail:songs.length}));
 	}
 
 	protected updateCurrent() {
-		let songs = [...this.children].filter(node => node instanceof Song) as Song[];
+		const songs = [...this.children].filter((node): node is Song => node instanceof Song);
 		songs.forEach(node => {
 			node.playing = (node.songId == this.currentId);
 		});
@@ -66,8 +58,8 @@ class Queue extends Component {
 	protected buildSongs(songs: SongData[]) {
 		html.clear(this);
 
-		let nodes = songs.map(song => {
-			let node = new Song(song);
+		const nodes = songs.map(song => {
+			const node = new Song(song);
 			node.addButton("play", async () => {
 				await this.mpd.command(`playid ${node.songId}`);
 			});
@@ -82,22 +74,22 @@ class Queue extends Component {
 	protected configureSelection(nodes: Song[]) {
 		const { mpd, selection } = this;
 
-		let commands = [{
-			cb: (items: Song[]) => {
-				const commands = generateMoveCommands(items, -1, this);
-				mpd.command(commands);
+		const commands = [{
+			cb: (items: HTMLElement[]) => {
+				const moves = generateMoveCommands(songsOf(items), -1, this);
+				mpd.command(moves);
 			},
 			label:"Up",
 			icon:"arrow-up-bold"
 		}, {
-			cb: (items: Song[]) => {
-				const commands = generateMoveCommands(items, +1, this);
-				mpd.command(commands.reverse()); // move last first
+			cb: (items: HTMLElement[]) => {
+				const moves = generateMoveCommands(songsOf(items), +1, this);
+				mpd.command(moves.reverse()); // move last first
 			},
 			label:"Down",
 			icon:"arrow-down-bold"
 		}, {
-			cb: async (items: Song[]) => {
+			cb: async (items: HTMLElement[]) => {
 				let name = prompt("Save selected songs as a playlist?", "name");
 				if (name === null) { return; }
 
@@ -106,7 +98,7 @@ class Queue extends Component {
 					await mpd.command(`rm "${name}"`);
 				} catch (e) {}
 
-				const commands = items.map(item => {
+				const commands = songsOf(items).map(item => {
 					return `playlistadd "${name}" "${escape(item.file)}"`;
 				});
 				await mpd.command(commands);
@@ -116,10 +108,11 @@ class Queue extends Component {
 			label:"Save",
 			icon:"content-save"
 		}, {
-			cb: async (items: Song[]) => {
-				if (!confirm(`Remove these ${items.length} songs from the queue?`)) { return; }
+			cb: async (items: HTMLElement[]) => {
+				const selected = songsOf(items);
+				if (!confirm(`Remove these ${selected.length} songs from the queue?`)) { return; }
 
-				const commands = items.map(item => `deleteid ${item.songId}`);
+				const commands = selected.map(item => `deleteid ${item.songId}`);
 				mpd.command(commands);
 			},
 			label:"Remove",

@@ -1,4 +1,4 @@
-import "./elements/range.js";
+import "./range.js";
 import "./elements/app.js";
 import "./elements/menu.js";
 import "./elements/player.js";
@@ -11,3 +11,6 @@ import "./elements/library.js";
 import "./elements/tag.js";
 import "./elements/back.js";
 import "./elements/path.js";
+import "./elements/fetch-settings.js";
+import "./elements/shutdown.js";
+import "./elements/refresh.js";

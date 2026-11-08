@@ -11,16 +11,24 @@ interface ResultData {
 	id: string;
 }
 
+function isResultList(data: unknown): data is ResultData[] {
+	return Array.isArray(data) && data.every((item: unknown) => {
+		return typeof item == "object" && item !== null
+			&& "title" in item && typeof item.title == "string"
+			&& "id" in item && typeof item.id == "string";
+	});
+}
+
 class YT extends Component {
-	search = new Search();
+	protected search = new Search();
 
 	constructor() {
 		super();
 
 		this.search.onSubmit = () => {
-			let query = this.search.value;
-			query && this.doSearch(query);
-		}
+			const query = this.search.value;
+			if (query) { this.doSearch(query); }
+		};
 
 		this.clear();
 	}
@@ -34,18 +42,19 @@ class YT extends Component {
 		this.clear();
 		this.search.pending(true);
 
-		let url = `youtube?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(conf.ytLimit)}`;
-		let response = await fetch(url);
+		const url = `youtube?q=${encodeURIComponent(query)}&limit=${encodeURIComponent(conf.ytLimit)}`;
+		const response = await fetch(url);
 		if (response.status == 200) {
-			let results = await response.json() as ResultData[];
-			results.forEach(result => {
-				let node = new Result(result.title);
-				this.append(node);
-				node.addButton("download", () => this.download(result.id));
-			});
+			const results: unknown = await response.json();
+			if (isResultList(results)) {
+				results.forEach(result => {
+					const node = new Result(result.title);
+					this.append(node);
+					node.addButton("download", () => this.download(result.id));
+				});
+			}
 		} else {
-			let text = await response.text();
-			alert(text);
+			alert(await response.text());
 		}
 
 		this.search.pending(false);
@@ -54,30 +63,38 @@ class YT extends Component {
 	protected async download(id: string) {
 		this.clear();
 
-		let pre = html.node("pre", {}, "", this);
+		const pre = html.node("pre", {}, "", this);
 		this.search.pending(true);
 
-		let body = new URLSearchParams();
+		const body = new URLSearchParams();
 		body.set("id", id);
-		let response = await fetch("youtube", {method:"POST", body});
+		const response = await fetch("youtube", {method:"POST", body});
 
-		let reader = response.body!.getReader();
-		while (true) {
-			let { done, value } = await reader.read();
-			if (done) { break; }
-			pre.textContent += decodeChunk(value!);
-			pre.scrollTop = pre.scrollHeight;
+		let output = "";
+		if (response.body) {
+			const reader = response.body.getReader();
+			for (;;) {
+				const chunk = await reader.read();
+				if (chunk.done) { break; }
+				const text = decoder.decode(chunk.value, {stream: true});
+				output += text;
+				pre.textContent += text;
+				pre.scrollTop = pre.scrollHeight;
+			}
+			reader.releaseLock();
 		}
-		reader.releaseLock();
 
 		this.search.pending(false);
 
-		if (response.status == 200) {
+		// only a finished download is added to MPD; a failure stays visible in the output
+		if (response.status == 200 && output.includes("[cyp] done")) {
 			this.mpd.command(`update ${escape(conf.ytPath)}`);
+		} else {
+			pre.textContent += "\nDownload did not finish. Nothing was added to the library.\n";
 		}
 	}
 
-	protected onComponentChange(c: string, isThis: boolean) {
+	protected override onComponentChange(_c: string, isThis: boolean) {
 		const wasHidden = this.hidden;
 		this.hidden = !isThis;
 
@@ -87,8 +104,5 @@ class YT extends Component {
 
 customElements.define("cyp-yt", YT);
 
+// one decoder for the whole stream: a character split across two chunks is decoded whole
 const decoder = new TextDecoder("utf-8");
-function decodeChunk(byteArray: Uint8Array) {
-	// \r => \n
-	return decoder.decode(byteArray).replace(/\u000d/g, "\n");
-}
